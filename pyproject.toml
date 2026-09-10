@@ -1,0 +1,22 @@
+[project]
+name = "bili-agent-cli"
+version = "0.1.0"
+description = "Bilibili API and agent command-line backend"
+readme = "README.md"
+authors = [
+    { name = "dylan", email = "5dylanwu@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi[standard]>=0.141.1",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.5",
+    "qrcode==8.2",
+]
+
+[project.scripts]
+bili-agent-cli = "bili_agent_cli.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"

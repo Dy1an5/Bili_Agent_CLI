@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.py[cod]
+/privacy
+/profile.txt
+/privacy/profile.txt
+/privacy/.profile.*
