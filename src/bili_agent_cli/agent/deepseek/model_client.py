@@ -151,7 +151,7 @@ async def create_agent_message(
         "model": DEEPSEEK_MODEL,
         "messages": messages,
         "tools": tools,
-        "tool_choices": "auto",
+        "tool_choice": "auto",
     }
 
     headers = build_headers(api_key)
@@ -204,3 +204,57 @@ async def create_agent_message(
         )
 
     return message
+
+SUMMARY_SYSTEM_PROMPT = """
+你负责压缩对话历史。只根据输入生成中文摘要，不回答用户的新问题。
+必须保留：用户目标和约束；已确认的视频、UP主和标识符；
+未完成事项、工具错误及不确定信息。禁止补充输入中没有的事实。
+""".strip()
+
+async def create_conversation_summary(
+    summary_input: str,
+    max_tokens: int,
+) -> str:
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": SUMMARY_SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": summary_input,
+            }
+        ],
+        "max_tokens": max_tokens
+    }
+
+    headers = build_headers(load_api_key())
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                DEEPSEEK_URL,
+                json=payload,
+                headers=headers,
+            )
+    except httpx.TimeoutException as exc:
+        raise ProviderTimeoutError("model timeout") from exc
+    except httpx.RequestError as exc:
+        raise ProviderNetworkError("model network error") from exc
+
+    if not response.is_success:
+        raise ProviderHTTPError(
+            status_code=response.status_code,
+            category="provider_http_error",
+        )
+
+    try:
+        response_payload = response.json()
+        content = response_payload["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise ProviderResponseError("invalid provider response") from exc
+
+    if not isinstance(content, str) or not content.strip():
+        raise ProviderResponseError("invalid summary content")
+    return content.strip()

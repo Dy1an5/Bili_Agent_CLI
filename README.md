@@ -34,6 +34,16 @@ uv run bili-agent-cli get /x/v3/fav/folder/created/list-all \
 
 调试入口只允许访问 `https://api.bilibili.com` 下的绝对路径，并且只发送 `SESSDATA`，不会输出请求 Cookie。
 
+## 启动 Agent 对话
+
+直接在终端启动多轮对话：
+
+```bash
+uv run bili-agent-cli agent
+```
+
+对话过程中输入 `/new` 开始新会话，输入 `/exit` 退出。会话上下文保存在当前 CLI 进程内，退出后不会保留。
+
 ## 启动 FastAPI
 
 ```bash

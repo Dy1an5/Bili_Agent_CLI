@@ -7,16 +7,11 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from bili_agent_cli.routes.agent import router as agent_router
 from bili_agent_cli.routes.following import router as following_router
 from bili_agent_cli.routes.favorites import router as favorites_router
 from bili_agent_cli.routes.watch_later import router as watch_later_router
 from bili_agent_cli.routes.search import router as search_router
-
-from .agent.models import (
-    AgentRunRequest,
-    AgentRunResponse,
-)
-from .agent.agent_loop import run_agent
 
 class HealthResponse(BaseModel):
     status: Literal["ok"]
@@ -40,17 +35,9 @@ app.include_router(following_router)
 app.include_router(favorites_router)
 app.include_router(watch_later_router)
 app.include_router(search_router)
+app.include_router(agent_router)
 
 
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     return HealthResponse(status="ok")
-
-@app.post(
-    "/agent/run",
-    response_model = AgentRunResponse,
-)
-async def agent_run(
-    request: AgentRunRequest,
-) -> AgentRunResponse:
-    return await run_agent(request.task)

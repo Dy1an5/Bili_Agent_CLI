@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import unittest
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import httpx
 
 from bili_agent_cli.main import app
+from bili_agent_cli.agent.models import AgentRunResponse
 from bili_agent_cli.schemas.favorites import (
     FavoriteFolder,
     FavoriteFolderListResponse,
@@ -39,12 +41,48 @@ class MainTest(unittest.TestCase):
         ) as client:
             return await client.get(path, params=parameters)
 
+    async def _post(
+        self,
+        path: str,
+        payload: dict[str, object],
+    ) -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            return await client.post(path, json=payload)
+
     def test_health(self) -> None:
         response = asyncio.run(self._request("/health"))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
         self.assertEqual(response.text, '{\n    "status": "ok"\n}')
+
+    def test_agent_route_keeps_public_contract(self) -> None:
+        session_id = uuid4()
+        result = AgentRunResponse(
+            answer="测试回答",
+            session_id=session_id,
+        )
+
+        with patch(
+            "bili_agent_cli.routes.agent.run_agent",
+            new=AsyncMock(return_value=result),
+        ) as run_mock:
+            response = asyncio.run(
+                self._post(
+                    "/agent/run",
+                    {"task": "测试问题", "session_id": None},
+                )
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["answer"], "测试回答")
+        self.assertEqual(response.json()["session_id"], str(session_id))
+        run_mock.assert_awaited_once_with("测试问题", None)
 
     def test_following_route_returns_response_model(self) -> None:
         parsed_response = FollowingFeedResponse.model_validate(

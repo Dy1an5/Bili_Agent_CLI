@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-bili-agent-cli = "bili_agent_cli.cli:main"
+bili-agent-cli = "bili_agent_cli.cli.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]

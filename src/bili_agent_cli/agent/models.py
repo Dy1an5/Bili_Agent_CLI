@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -10,14 +12,15 @@ class AgentRunRequest(BaseModel):
         extra = "forbid"
     )
 
-    task: str = Field(
-        min_length = 1,
-        max_length = 1000
-    )
+    task: str = Field(min_length = 1, max_length = 1000)
+    session_id: UUID | None = None
 
 class AgentSource(BaseModel):
     bvid: str
-    cid :str
+    cid :str | None = None
+    title: str | None = None
+    author_name: str | None = None
+    folder_id: str | None = None
 
 class AgentStep(BaseModel):
     step: int
@@ -26,10 +29,8 @@ class AgentStep(BaseModel):
 
 class AgentRunResponse(BaseModel):
     answer: str
-    sources: list[AgentSource] = Field(
-        default_factory=list
-    )
-    trace: list[AgentStep] = Field(
-        default_factory=list
-    )
+    session_id: UUID
+    context_compacted: bool = False
+    sources: list[AgentSource] = Field(default_factory=list)
+    trace: list[AgentStep] = Field(default_factory=list)
 
