@@ -56,6 +56,8 @@ privacy/conversations/{session_id}/
 
 Agent 会保留最近的完整对话；上下文接近预算时，会把较早轮次压缩成摘要。每次工具调用保存为独立 EvidenceBatch，内容与实际发送给模型的裁剪结果一致，并受单轮 Evidence 总预算约束。响应中的 `sources` 只包含最终回答实际引用且经过代码校验的视频；同一视频来自多个工具时会合并 `source_tools`。旧轮次被摘要后，其 EvidenceBatch 不再参与后续来源校验。
 
+发给模型的工具证据里，`published_at` 和 `favorited_at` 已由代码统一换算成 UTC+8 文本（例如 `2026-09-12 11:00 (UTC+8)`），模型不需要也不能自行换算。FastAPI 接口返回的时间仍是 UTC 的 ISO 8601 格式。
+
 当前轮次会先以 `pending_turn` 保存。工具执行后立即更新其中的 Evidence 和分页状态；模型调用中断时该轮标记为 `interrupted`，下一次交互仍能看到已经取得的结果。
 
 可以通过环境变量调整上下文策略：

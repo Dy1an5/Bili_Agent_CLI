@@ -2,8 +2,5 @@
 __pycache__/
 *.py[cod]
 /privacy
-/profile.txt
-/privacy/profile.txt
-/privacy/.profile.*
 secret/
 docs/

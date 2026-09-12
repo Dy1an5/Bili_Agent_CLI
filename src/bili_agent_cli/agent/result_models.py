@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from typing import Annotated
 
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel, PlainSerializer, computed_field
 
 from bili_agent_cli.agent.models import build_video_source_id
 from bili_agent_cli.schemas.common import VideoStats
@@ -10,6 +11,32 @@ from bili_agent_cli.schemas.following import (
     FollowingDynamicStats,
     FollowingVideoStats,
 )
+
+
+BEIJING_TIMEZONE = timezone(timedelta(hours=8), "UTC+8")
+BEIJING_TIME_FORMAT = "%Y-%m-%d %H:%M (UTC+8)"
+
+
+def format_beijing_time(value: datetime | None) -> str | None:
+    """把时间统一换算成 UTC+8 的可读文本，避免模型自行换算。"""
+
+    if value is None:
+        return None
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+
+    return value.astimezone(BEIJING_TIMEZONE).strftime(BEIJING_TIME_FORMAT)
+
+
+BeijingTime = Annotated[
+    datetime,
+    PlainSerializer(
+        format_beijing_time,
+        return_type=str,
+        when_used="json",
+    ),
+]
 
 
 class LlmVideoAuthor(BaseModel):
@@ -41,7 +68,7 @@ class LlmFavoriteVideo(LlmSourceVideo):
     title: str
     description: str | None
     duration_seconds: int
-    favorited_at: datetime | None
+    favorited_at: BeijingTime | None
     author: LlmVideoAuthor
     stats: VideoStats
 
@@ -59,7 +86,7 @@ class LlmWatchLaterVideo(LlmSourceVideo):
     title: str
     duration_seconds: int
     progress_seconds: int
-    published_at: datetime
+    published_at: BeijingTime
     author: LlmVideoAuthor
     stats: VideoStats
 
@@ -77,7 +104,7 @@ class LlmSearchVideo(LlmSourceVideo):
     title: str
     description: str
     duration_seconds: int
-    published_at: datetime
+    published_at: BeijingTime
     author: LlmVideoAuthor
     stats: VideoStats
 
@@ -98,7 +125,7 @@ class LlmFollowingVideo(LlmSourceVideo):
 
 class LlmFollowingVideoItem(BaseModel):
     dynamic_id: str
-    published_at: datetime
+    published_at: BeijingTime
     author: LlmVideoAuthor
     video: LlmFollowingVideo
     dynamic_stats: FollowingDynamicStats

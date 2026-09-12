@@ -54,6 +54,7 @@ SYSTEM_PROMPT = """
 用户要求继续翻页时，优先使用最近 pagination_state 中的 next_arguments
 pagination_state 的 has_more 为 false 时，不要重复请求同一页
 工具结果中的 source_id 是可信视频来源标识
+工具结果中的时间已经换算成 UTC+8，直接使用该文本，不要再次换算或改标时区
 最终回答必须单独调用 submit_agent_answer 提交 answer 和实际使用的 source_ids
 不要把没有用于回答的视频放进 source_ids，也不要编造 source_id
 """.strip()
