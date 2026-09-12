@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from bili_agent_cli.agent.agent_loop import run_agent, session_store
@@ -14,12 +15,60 @@ from bili_agent_cli.agent.context import (
 from bili_agent_cli.agent.deepseek.errors import ModelCallError
 
 
+if TYPE_CHECKING:
+    from prompt_toolkit import PromptSession
+
+
 RECOVERABLE_CHAT_ERRORS = (
     ContextBudgetExceededError,
     ModelCallError,
     SessionNotFoundError,
     SessionStorageError,
 )
+
+_prompt_session: PromptSession[str] | None = None
+_enhanced_input_disabled = False
+
+
+def _get_prompt_session() -> PromptSession[str]:
+    """懒加载 prompt_toolkit 会话，避免非交互命令也去碰终端。"""
+
+    global _prompt_session
+
+    if _prompt_session is None:
+        from prompt_toolkit import PromptSession
+
+        _prompt_session = PromptSession()
+
+    return _prompt_session
+
+
+async def _read_task(prompt: str) -> str:
+    """读取一条用户输入。
+
+    真终端交给 prompt_toolkit：它按显示宽度计算重绘位置，汉字退格不会残留。
+    标准输入或输出不是终端时（管道、重定向、测试）退回内置 input。
+    """
+
+    global _enhanced_input_disabled
+
+    if _enhanced_input_disabled or not (
+        sys.stdin.isatty() and sys.stdout.isatty()
+    ):
+        return input(prompt)
+
+    try:
+        return await _get_prompt_session().prompt_async(prompt)
+    except (EOFError, KeyboardInterrupt):
+        raise
+    except Exception:
+        _enhanced_input_disabled = True
+        print(
+            "提示：当前终端不支持增强输入，已退回基础输入模式。",
+            file=sys.stderr,
+        )
+
+        return input(prompt)
 
 
 def register_command(subparsers: argparse._SubParsersAction) -> None:
@@ -38,7 +87,7 @@ async def run(arguments: argparse.Namespace) -> None:
 
     while True:
         try:
-            task = input("你> ").strip()
+            task = (await _read_task("你> ")).strip()
         except EOFError:
             print()
             break

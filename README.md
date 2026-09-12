@@ -44,6 +44,8 @@ uv run bili-agent-cli agent
 
 对话过程中输入 `/new` 开始新会话，输入 `/context` 查看当前 Session 保存的摘要、轮次、工具证据、实际引用来源和未完成轮次，输入 `/exit` 退出。会话会持久化到 `privacy/conversations/`；Agent HTTP 接口在程序重启后仍可传入原 `session_id` 载入。CLI 暂未提供 `/resume` 选择入口。
 
+交互输入由 `prompt_toolkit` 接管：汉字等宽字符的退格按显示宽度重绘，不会留下半个字，另外支持 ↑/↓ 调出本次会话的历史和多行粘贴。标准输入或标准输出不是终端时（管道、重定向、测试）自动退回内置 `input`，行为与以前一致。需要注意：uv 管理的 CPython 里 `readline` 是内建 libedit 模块（`sys.builtin_module_names` 里有它，且没有 `__file__`），它按字符数而不是显示宽度计算重绘位置，汉字退格仍会残留，所以不要试图用 `import readline` 修这个问题；后续新增交互提示请统一走 `cli/agent.py` 的 `_read_task`，不要再直接调用 `input`。
+
 每个会话使用独立目录：
 
 ```text

@@ -5,6 +5,7 @@ import asyncio
 import unittest
 from datetime import datetime, timezone
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -15,6 +16,7 @@ from bili_agent_cli.agent.context import (
     ConversationTurn,
 )
 from bili_agent_cli.agent.deepseek.errors import ProviderTimeoutError
+from bili_agent_cli.cli.agent import _read_task
 from bili_agent_cli.cli.agent import run as run_agent_chat
 from bili_agent_cli.cli.main import _create_parser
 
@@ -74,8 +76,8 @@ class AgentCliTest(unittest.TestCase):
 
         with (
             patch(
-                "bili_agent_cli.cli.agent.input",
-                side_effect=["第一轮", "第二轮", "/exit"],
+                "bili_agent_cli.cli.agent._read_task",
+                new=AsyncMock(side_effect=["第一轮", "第二轮", "/exit"]),
             ),
             patch("bili_agent_cli.cli.agent.run_agent", new=model),
             patch("sys.stdout", new_callable=StringIO),
@@ -97,8 +99,10 @@ class AgentCliTest(unittest.TestCase):
 
         with (
             patch(
-                "bili_agent_cli.cli.agent.input",
-                side_effect=["第一轮", "/new", "新会话", "/exit"],
+                "bili_agent_cli.cli.agent._read_task",
+                new=AsyncMock(
+                    side_effect=["第一轮", "/new", "新会话", "/exit"]
+                ),
             ),
             patch("bili_agent_cli.cli.agent.run_agent", new=model),
             patch("sys.stdout", new_callable=StringIO),
@@ -138,8 +142,10 @@ class AgentCliTest(unittest.TestCase):
 
         with (
             patch(
-                "bili_agent_cli.cli.agent.input",
-                side_effect=["第一轮问题", "/context", "/exit"],
+                "bili_agent_cli.cli.agent._read_task",
+                new=AsyncMock(
+                    side_effect=["第一轮问题", "/context", "/exit"]
+                ),
             ),
             patch("bili_agent_cli.cli.agent.run_agent", new=model),
             patch(
@@ -163,8 +169,8 @@ class AgentCliTest(unittest.TestCase):
 
         with (
             patch(
-                "bili_agent_cli.cli.agent.input",
-                side_effect=["/context", "/exit"],
+                "bili_agent_cli.cli.agent._read_task",
+                new=AsyncMock(side_effect=["/context", "/exit"]),
             ),
             patch("sys.stdout", output),
         ):
@@ -186,8 +192,10 @@ class AgentCliTest(unittest.TestCase):
 
         with (
             patch(
-                "bili_agent_cli.cli.agent.input",
-                side_effect=["第一轮", "继续", "重试", "/exit"],
+                "bili_agent_cli.cli.agent._read_task",
+                new=AsyncMock(
+                    side_effect=["第一轮", "继续", "重试", "/exit"]
+                ),
             ),
             patch("bili_agent_cli.cli.agent.run_agent", new=model),
             patch("sys.stdout", output),
@@ -200,6 +208,102 @@ class AgentCliTest(unittest.TestCase):
         self.assertEqual(model.await_args_list[2].args, ("重试", session_id))
         self.assertIn("模型请求超时", errors.getvalue())
         self.assertIn("重试成功", output.getvalue())
+
+
+class ReadTaskTest(unittest.IsolatedAsyncioTestCase):
+    """输入接缝：真终端走 prompt_toolkit，其余情况退回内置 input。"""
+
+    def setUp(self) -> None:
+        for target, value in (
+            ("bili_agent_cli.cli.agent._prompt_session", None),
+            ("bili_agent_cli.cli.agent._enhanced_input_disabled", False),
+        ):
+            item = patch(target, new=value)
+            item.start()
+            self.addCleanup(item.stop)
+
+    @staticmethod
+    def _stream(is_tty: bool) -> SimpleNamespace:
+        return SimpleNamespace(isatty=lambda: is_tty)
+
+    async def test_falls_back_to_input_without_tty(self) -> None:
+        with (
+            patch(
+                "bili_agent_cli.cli.agent.input",
+                return_value="看动态",
+            ) as input_mock,
+            patch("sys.stdin", self._stream(False)),
+            patch("sys.stdout", self._stream(True)),
+        ):
+            result = await _read_task("你> ")
+
+        self.assertEqual(result, "看动态")
+        input_mock.assert_called_once_with("你> ")
+
+    async def test_uses_prompt_session_on_tty(self) -> None:
+        session = SimpleNamespace(
+            prompt_async=AsyncMock(return_value="看动态")
+        )
+
+        with (
+            patch(
+                "bili_agent_cli.cli.agent._get_prompt_session",
+                return_value=session,
+            ),
+            patch("bili_agent_cli.cli.agent.input") as input_mock,
+            patch("sys.stdin", self._stream(True)),
+            patch("sys.stdout", self._stream(True)),
+        ):
+            result = await _read_task("你> ")
+
+        self.assertEqual(result, "看动态")
+        session.prompt_async.assert_awaited_once_with("你> ")
+        input_mock.assert_not_called()
+
+    async def test_falls_back_once_when_prompt_session_fails(self) -> None:
+        session = SimpleNamespace(
+            prompt_async=AsyncMock(side_effect=RuntimeError("终端不可用"))
+        )
+        errors = StringIO()
+
+        with (
+            patch(
+                "bili_agent_cli.cli.agent._get_prompt_session",
+                return_value=session,
+            ),
+            patch(
+                "bili_agent_cli.cli.agent.input",
+                return_value="看动态",
+            ) as input_mock,
+            patch("sys.stdin", self._stream(True)),
+            patch("sys.stdout", self._stream(True)),
+            patch("sys.stderr", errors),
+        ):
+            first = await _read_task("你> ")
+            second = await _read_task("你> ")
+
+        self.assertEqual((first, second), ("看动态", "看动态"))
+        self.assertEqual(input_mock.call_count, 2)
+        self.assertEqual(session.prompt_async.await_count, 1)
+        self.assertIn("已退回基础输入模式", errors.getvalue())
+
+    async def test_eof_and_interrupt_propagate(self) -> None:
+        for error in (EOFError(), KeyboardInterrupt()):
+            with self.subTest(error=type(error).__name__):
+                session = SimpleNamespace(
+                    prompt_async=AsyncMock(side_effect=error)
+                )
+
+                with (
+                    patch(
+                        "bili_agent_cli.cli.agent._get_prompt_session",
+                        return_value=session,
+                    ),
+                    patch("sys.stdin", self._stream(True)),
+                    patch("sys.stdout", self._stream(True)),
+                ):
+                    with self.assertRaises(type(error)):
+                        await _read_task("你> ")
 
 
 if __name__ == "__main__":
