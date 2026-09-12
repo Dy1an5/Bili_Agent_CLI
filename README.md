@@ -140,6 +140,27 @@ curl --get http://127.0.0.1:8000/api/watch-later \
 
 稍后再看接口使用 WBI 签名。`published_at` 和 `favorited_at` 会输出为 ISO 8601 时间。
 
+## 获取观看历史
+
+获取最近一页普通视频观看历史：
+
+```bash
+curl --get http://127.0.0.1:8000/api/history \
+    --data-urlencode 'page_size=20'
+```
+
+响应中的 `next_max` 和 `next_view_at` 是下一页所需的双游标：
+
+```bash
+curl --get http://127.0.0.1:8000/api/history \
+    --data-urlencode 'page_size=20' \
+    --data-urlencode 'max=上一页的next_max' \
+    --data-urlencode 'view_at=上一页的next_view_at'
+```
+
+观看历史只返回普通视频记录。`progress_seconds=-1` 表示已经看完；
+`viewed_at` 在 HTTP API 中使用 UTC ISO 8601 时间，在 Agent 上下文中转换为 UTC+8 文本。
+
 ## 搜索视频
 
 ```bash

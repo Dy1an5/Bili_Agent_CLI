@@ -15,6 +15,11 @@ from bili_agent_cli.schemas.favorites import (
     FavoriteVideoAuthor,
 )
 from bili_agent_cli.schemas.common import VideoStats
+from bili_agent_cli.schemas.history import (
+    HistoryResponse,
+    HistoryVideo,
+    HistoryVideoAuthor,
+)
 
 
 class AgentToolsTest(unittest.TestCase):
@@ -26,6 +31,7 @@ class AgentToolsTest(unittest.TestCase):
                 "get_favorite_folders",
                 "get_favorite_folder_videos",
                 "get_watch_later",
+                "get_watch_history",
                 "search_videos",
             },
         )
@@ -39,6 +45,9 @@ class AgentToolsTest(unittest.TestCase):
         self.assertEqual(folder_parameters["properties"], {})
         self.assertIn("folder_id", video_parameters["required"])
         self.assertIn("keyword", schemas["search_videos"]["parameters"]["required"])
+        history_parameters = schemas["get_watch_history"]["parameters"]
+        self.assertIn("max", history_parameters["properties"])
+        self.assertIn("view_at", history_parameters["properties"])
         self.assertIn("submit_agent_answer", schemas)
         self.assertIn(
             "source_ids",
@@ -140,6 +149,44 @@ class AgentToolsTest(unittest.TestCase):
         self.assertEqual(video["description"], "视频简介")
         self.assertEqual(video["stats"]["views"], 1000)
         self.assertIsNone(video["stats"]["likes"])
+
+    def test_projects_history_result_and_adds_source_id(self) -> None:
+        response = HistoryResponse(
+            videos=[
+                HistoryVideo(
+                    bvid="BV1history",
+                    cid="789",
+                    title="看过的视频",
+                    cover_url="https://i0.hdslb.com/history.jpg",
+                    viewed_at=1_757_472_400,
+                    progress_seconds=-1,
+                    duration_seconds=300,
+                    is_favorite=True,
+                    author=HistoryVideoAuthor(
+                        mid="456",
+                        name="历史UP主",
+                        avatar_url="https://i0.hdslb.com/avatar.jpg",
+                    ),
+                )
+            ],
+            page_size=20,
+            has_more=True,
+            next_max=123,
+            next_view_at=1_757_472_400,
+        )
+
+        with patch(
+            "bili_agent_cli.agent.registry.get_watch_history_tool",
+            new=AsyncMock(return_value=response),
+        ):
+            result = asyncio.run(execute_tool("get_watch_history", {}))
+
+        self.assertTrue(result["ok"])
+        video = result["data"]["videos"][0]
+        self.assertEqual(video["source_id"], "bilibili:video:BV1history")
+        self.assertEqual(video["viewed_at"], "2025-09-10 10:46 (UTC+8)")
+        self.assertNotIn("cover_url", video)
+        self.assertNotIn("avatar_url", video["author"])
 
 
 if __name__ == "__main__":

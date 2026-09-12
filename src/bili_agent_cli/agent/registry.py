@@ -14,6 +14,7 @@ from bili_agent_cli.schemas.following import (
     FollowingFeedQuery,
     FollowingFeedResponse,
 )
+from bili_agent_cli.schemas.history import HistoryQuery, HistoryResponse
 from bili_agent_cli.schemas.search import SearchVideoQuery, SearchVideoResponse
 from bili_agent_cli.schemas.watch_later import WatchLaterQuery, WatchLaterResponse
 
@@ -21,6 +22,7 @@ from .result_models import (
     project_favorite_folder_videos,
     project_favorite_folders,
     project_following_feed,
+    project_watch_history,
     project_search_videos,
     project_watch_later,
 )
@@ -29,6 +31,7 @@ from .tools.bili.get_favorites import (
     get_favorite_folders_tool,
 )
 from .tools.bili.get_following import get_following_feed_tool
+from .tools.bili.get_history import get_watch_history_tool
 from .tools.bili.get_watch_later import get_watch_later_tool
 from .tools.bili.search_videos import search_videos_tool
 
@@ -73,6 +76,13 @@ async def _run_get_watch_later_tool(args: BaseModel) -> BaseModel:
         raise TypeError("get_watch_later_tool 收到了错误的参数模型")
 
     return await get_watch_later_tool(args)
+
+
+async def _run_get_watch_history_tool(args: BaseModel) -> BaseModel:
+    if not isinstance(args, HistoryQuery):
+        raise TypeError("get_watch_history_tool 收到了错误的参数模型")
+
+    return await get_watch_history_tool(args)
 
 
 async def _run_search_videos_tool(args: BaseModel) -> BaseModel:
@@ -128,6 +138,17 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         result_model=WatchLaterResponse,
         executor=_run_get_watch_later_tool,
         result_projector=project_watch_later,
+    ),
+    "get_watch_history": ToolDefinition(
+        name="get_watch_history",
+        description=(
+            "使用 max 和 view_at 双游标获取当前已登录 Bilibili 用户的"
+            "普通视频观看历史。返回观看时间、播放进度和下一页游标。"
+        ),
+        args_model=HistoryQuery,
+        result_model=HistoryResponse,
+        executor=_run_get_watch_history_tool,
+        result_projector=project_watch_history,
     ),
     "search_videos": ToolDefinition(
         name="search_videos",

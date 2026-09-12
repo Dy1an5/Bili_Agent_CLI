@@ -390,6 +390,7 @@ PAGED_TOOL_NAMES = {
     "get_following_feed",
     "get_favorite_folder_videos",
     "get_watch_later",
+    "get_watch_history",
     "search_videos",
 }
 
@@ -418,6 +419,23 @@ def extract_pagination_state(
             next_offset = data.get("next_offset")
             if isinstance(next_offset, str) and next_offset:
                 next_arguments = {"offset": next_offset}
+        elif tool_name == "get_watch_history":
+            next_max = data.get("next_max")
+            next_view_at = data.get("next_view_at")
+            page_size = data.get("page_size")
+            if (
+                isinstance(next_max, int)
+                and not isinstance(next_max, bool)
+                and isinstance(next_view_at, int)
+                and not isinstance(next_view_at, bool)
+                and isinstance(page_size, int)
+                and not isinstance(page_size, bool)
+            ):
+                next_arguments = {
+                    "page_size": page_size,
+                    "max": next_max,
+                    "view_at": next_view_at,
+                }
         else:
             page = data.get("page")
             page_size = data.get("page_size")

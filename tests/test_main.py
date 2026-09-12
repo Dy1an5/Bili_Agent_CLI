@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import httpx
 
+from bili_agent_cli.bilibili.history import HistoryError
 from bili_agent_cli.main import app
 from bili_agent_cli.agent.context import (
     ContextBudgetExceededError,
@@ -20,12 +21,18 @@ from bili_agent_cli.schemas.favorites import (
     FavoriteVideo,
     FavoriteVideoAuthor,
 )
+from bili_agent_cli.schemas.history import (
+    HistoryResponse,
+    HistoryVideo,
+    HistoryVideoAuthor,
+)
 from bili_agent_cli.schemas.following import FollowingFeedResponse
 from bili_agent_cli.schemas.watch_later import (
     WatchLaterResponse,
     WatchLaterVideo,
     WatchLaterVideoAuthor,
 )
+from bili_agent_cli.profile import ProfileError
 from bili_agent_cli.schemas.search import SearchVideoResponse
 from tests.test_following import EXPECTED_FOLLOWING_RESPONSE
 from tests.test_search_schemas import EXPECTED_SEARCH_RESPONSE
@@ -347,6 +354,87 @@ class MainTest(unittest.TestCase):
         self.assertEqual(response.json(), parsed_response.model_dump(mode="json"))
         query = fetch_mock.await_args.args[0]
         self.assertTrue(query.ascending)
+
+    def test_history_route_returns_response_model(self) -> None:
+        parsed_response = HistoryResponse(
+            videos=[
+                HistoryVideo(
+                    bvid="BV1history",
+                    cid="789",
+                    title="看过的视频",
+                    cover_url="https://i0.hdslb.com/history.jpg",
+                    viewed_at=1_757_472_400,
+                    progress_seconds=60,
+                    duration_seconds=300,
+                    is_favorite=False,
+                    author=HistoryVideoAuthor(
+                        mid="456",
+                        name="历史UP主",
+                        avatar_url=None,
+                    ),
+                )
+            ],
+            page_size=10,
+            has_more=True,
+            next_max=123,
+            next_view_at=1_757_472_400,
+        )
+
+        with (
+            patch(
+                "bili_agent_cli.routes.history.load_profile",
+                return_value={
+                    "SESSDATA": "test-value",
+                    "bili_jct": "csrf-value",
+                    "DedeUserID": "123",
+                },
+            ),
+            patch(
+                "bili_agent_cli.routes.history.fetch_watch_history",
+                new=AsyncMock(return_value=parsed_response),
+            ) as fetch_mock,
+        ):
+            response = asyncio.run(
+                self._request(
+                    "/api/history",
+                    {"page_size": "10", "max": "999", "view_at": "888"},
+                )
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), parsed_response.model_dump(mode="json"))
+        query = fetch_mock.await_args.args[0]
+        self.assertEqual(query.page_size, 10)
+        self.assertEqual(query.max, 999)
+        self.assertEqual(query.view_at, 888)
+
+    def test_history_route_maps_profile_and_upstream_errors(self) -> None:
+        with patch(
+            "bili_agent_cli.routes.history.load_profile",
+            side_effect=ProfileError("未登录"),
+        ):
+            unauthorized = asyncio.run(self._request("/api/history"))
+
+        with (
+            patch(
+                "bili_agent_cli.routes.history.load_profile",
+                return_value={
+                    "SESSDATA": "test-value",
+                    "bili_jct": "csrf-value",
+                    "DedeUserID": "123",
+                },
+            ),
+            patch(
+                "bili_agent_cli.routes.history.fetch_watch_history",
+                new=AsyncMock(side_effect=HistoryError("上游错误")),
+            ),
+        ):
+            bad_gateway = asyncio.run(self._request("/api/history"))
+
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(unauthorized.json(), {"detail": "未登录"})
+        self.assertEqual(bad_gateway.status_code, 502)
+        self.assertEqual(bad_gateway.json(), {"detail": "上游错误"})
 
     def test_search_videos_route_returns_response_model(self) -> None:
         parsed_response = SearchVideoResponse.model_validate(

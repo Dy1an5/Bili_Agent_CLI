@@ -286,6 +286,28 @@ class ContextManagerTest(unittest.IsolatedAsyncioTestCase):
             {"keyword": "F1", "page": 3, "page_size": 20},
         )
 
+    def test_extracts_history_cursor_arguments(self) -> None:
+        state = extract_pagination_state(
+            "get_watch_history",
+            {"page_size": 10, "max": 1, "view_at": 2},
+            {
+                "ok": True,
+                "data": {
+                    "videos": [],
+                    "page_size": 10,
+                    "has_more": True,
+                    "next_max": 123,
+                    "next_view_at": 456,
+                },
+            },
+        )
+
+        self.assertIsNotNone(state)
+        self.assertEqual(
+            state.next_arguments,
+            {"page_size": 10, "max": 123, "view_at": 456},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ from bili_agent_cli.schemas.following import (
     FollowingDynamicStats,
     FollowingVideoStats,
 )
+from bili_agent_cli.schemas.history import HistoryResponse
 
 
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), "UTC+8")
@@ -99,6 +100,24 @@ class LlmWatchLaterResult(BaseModel):
     has_more: bool
 
 
+class LlmHistoryVideo(LlmSourceVideo):
+    cid: str | None
+    title: str
+    viewed_at: BeijingTime
+    progress_seconds: int
+    duration_seconds: int
+    is_favorite: bool
+    author: LlmVideoAuthor
+
+
+class LlmHistoryResult(BaseModel):
+    videos: list[LlmHistoryVideo]
+    page_size: int
+    has_more: bool
+    next_max: int | None
+    next_view_at: int | None
+
+
 class LlmSearchVideo(LlmSourceVideo):
     aid: str
     title: str
@@ -151,6 +170,12 @@ def project_favorite_folder_videos(result: BaseModel) -> BaseModel:
 
 def project_watch_later(result: BaseModel) -> BaseModel:
     return _project(result, LlmWatchLaterResult)
+
+
+def project_watch_history(result: BaseModel) -> BaseModel:
+    if not isinstance(result, HistoryResponse):
+        raise TypeError("project_watch_history 收到了错误的结果模型")
+    return _project(result, LlmHistoryResult)
 
 
 def project_search_videos(result: BaseModel) -> BaseModel:
