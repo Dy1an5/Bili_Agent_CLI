@@ -2,6 +2,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pydantic import BaseModel
 
+from bili_agent_cli.agent.models import AgentFinalAnswer
+
 from bili_agent_cli.schemas.favorites import (
     FavoriteFolderListResponse,
     FavoriteFolderVideosQuery,
@@ -12,9 +14,16 @@ from bili_agent_cli.schemas.following import (
     FollowingFeedQuery,
     FollowingFeedResponse,
 )
-from bili_agent_cli.schemas.watch_later import WatchLaterQuery, WatchLaterResponse
 from bili_agent_cli.schemas.search import SearchVideoQuery, SearchVideoResponse
+from bili_agent_cli.schemas.watch_later import WatchLaterQuery, WatchLaterResponse
 
+from .result_models import (
+    project_favorite_folder_videos,
+    project_favorite_folders,
+    project_following_feed,
+    project_search_videos,
+    project_watch_later,
+)
 from .tools.bili.get_favorites import (
     get_favorite_folder_videos_tool,
     get_favorite_folders_tool,
@@ -24,6 +33,9 @@ from .tools.bili.get_watch_later import get_watch_later_tool
 from .tools.bili.search_videos import search_videos_tool
 
 ToolExecutor = Callable[[BaseModel], Awaitable[BaseModel]]
+ToolResultProjector = Callable[[BaseModel], BaseModel]
+SUBMIT_AGENT_ANSWER_TOOL_NAME = "submit_agent_answer"
+
 
 @dataclass(frozen = True)
 class ToolDefinition:
@@ -32,6 +44,8 @@ class ToolDefinition:
     args_model: type[BaseModel]
     result_model: type[BaseModel]
     executor: ToolExecutor
+    result_projector: ToolResultProjector
+
 
 async def _run_get_following_feed_tool(args: BaseModel) -> BaseModel:
     if not isinstance(args, FollowingFeedQuery):
@@ -67,6 +81,7 @@ async def _run_search_videos_tool(args: BaseModel) -> BaseModel:
 
     return await search_videos_tool(args)
 
+
 TOOL_REGISTRY: dict[str, ToolDefinition] = {
     "get_following_feed": ToolDefinition(
         name = "get_following_feed",
@@ -77,6 +92,7 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         args_model = FollowingFeedQuery,
         result_model = FollowingFeedResponse,
         executor = _run_get_following_feed_tool,
+        result_projector=project_following_feed,
     ),
     "get_favorite_folders": ToolDefinition(
         name="get_favorite_folders",
@@ -88,6 +104,7 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         args_model=FavoriteFoldersQuery,
         result_model=FavoriteFolderListResponse,
         executor=_run_get_favorite_folders_tool,
+        result_projector=project_favorite_folders,
     ),
     "get_favorite_folder_videos": ToolDefinition(
         name="get_favorite_folder_videos",
@@ -99,6 +116,7 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         args_model=FavoriteFolderVideosQuery,
         result_model=FavoriteFolderVideosResponse,
         executor=_run_get_favorite_folder_videos_tool,
+        result_projector=project_favorite_folder_videos,
     ),
     "get_watch_later": ToolDefinition(
         name="get_watch_later",
@@ -109,6 +127,7 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         args_model=WatchLaterQuery,
         result_model=WatchLaterResponse,
         executor=_run_get_watch_later_tool,
+        result_projector=project_watch_later,
     ),
     "search_videos": ToolDefinition(
         name="search_videos",
@@ -119,11 +138,13 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         args_model=SearchVideoQuery,
         result_model=SearchVideoResponse,
         executor=_run_search_videos_tool,
+        result_projector=project_search_videos,
     ),
 }
 
+
 def build_tool_schemas() -> list[dict[str, object]]:
-    return [
+    tools = [
         {
             "type": "function",
             "function": {
@@ -134,3 +155,17 @@ def build_tool_schemas() -> list[dict[str, object]]:
         }
         for definition in TOOL_REGISTRY.values()
     ]
+    tools.append(
+        {
+            "type": "function",
+            "function": {
+                "name": SUBMIT_AGENT_ANSWER_TOOL_NAME,
+                "description": (
+                    "提交最终回答。完成数据工具调用后必须单独调用此工具；"
+                    "source_ids 只能填写工具结果中真实存在且回答实际使用的 source_id。"
+                ),
+                "parameters": AgentFinalAnswer.model_json_schema(),
+            },
+        }
+    )
+    return tools

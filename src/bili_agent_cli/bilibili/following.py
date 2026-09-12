@@ -8,10 +8,12 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from bili_agent_cli.bilibili.auth import BILIBILI_REFERER, BILIBILI_USER_AGENT
 from bili_agent_cli.schemas.following import (
     FollowingAuthor,
+    FollowingDynamicStats,
     FollowingFeedQuery,
     FollowingFeedResponse,
     FollowingVideo,
     FollowingVideoItem,
+    FollowingVideoStats,
 )
 
 
@@ -108,6 +110,31 @@ def _read_positive_timestamp(value: Any) -> int | None:
     return None
 
 
+def _read_non_negative_count(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+
+    return None
+
+
+def _read_count_text(value: Any) -> str | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return str(value)
+
+    return _read_non_empty_string(value)
+
+
+def _read_dynamic_count(
+    module_stat: dict[str, Any] | None,
+    key: str,
+) -> int | None:
+    stat = _as_record(module_stat.get(key)) if module_stat else None
+    return _read_non_negative_count(stat.get("count")) if stat else None
+
+
 def _normalize_image_url(value: Any) -> str | None:
     url = _read_non_empty_string(value)
 
@@ -164,6 +191,8 @@ def _parse_video_item(value: dict[str, Any]) -> FollowingVideoItem | None:
     cid = _read_positive_id(archive.get("cid"))
     title = _read_non_empty_string(archive.get("title"))
     cover_url = _normalize_image_url(archive.get("cover"))
+    archive_stat = _as_record(archive.get("stat"))
+    module_stat = _as_record(modules.get("module_stat")) if modules else None
 
     if not all(
         (
@@ -191,6 +220,24 @@ def _parse_video_item(value: dict[str, Any]) -> FollowingVideoItem | None:
             cid=cid,
             title=title,
             cover_url=cover_url,
+            stats=FollowingVideoStats(
+                views=(
+                    _read_count_text(archive_stat.get("play"))
+                    if archive_stat
+                    else None
+                ),
+                danmaku=(
+                    _read_count_text(archive_stat.get("danmaku"))
+                    if archive_stat
+                    else None
+                ),
+            ),
+        ),
+        dynamic_stats=FollowingDynamicStats(
+            likes=_read_dynamic_count(module_stat, "like"),
+            replies=_read_dynamic_count(module_stat, "comment"),
+            reposts=_read_dynamic_count(module_stat, "forward"),
+            favorites=_read_dynamic_count(module_stat, "favorite"),
         ),
     )
 

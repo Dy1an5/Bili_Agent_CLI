@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from bili_agent_cli.schemas.common import VideoStats
+
 
 class FavoriteFoldersQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -41,10 +43,12 @@ class FavoriteVideo(BaseModel):
     folder_id: str
     bvid: str
     title: str
+    description: str | None = None
     cover_url: str
     duration_seconds: int
     favorited_at: datetime | None
     author: FavoriteVideoAuthor
+    stats: VideoStats = Field(default_factory=VideoStats)
 
 
 class FavoriteFolderVideosResponse(BaseModel):

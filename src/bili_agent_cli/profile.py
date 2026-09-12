@@ -7,8 +7,9 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SECRET_DIR = PROJECT_ROOT / "secret"
 PRIVACY_DIR = PROJECT_ROOT / "privacy"
-PROFILE_PATH = PRIVACY_DIR / "profile.txt"
+PROFILE_PATH = SECRET_DIR / "profile.txt"
 REQUIRED_LOGIN_COOKIE_NAMES = ("SESSDATA", "bili_jct", "DedeUserID")
 
 

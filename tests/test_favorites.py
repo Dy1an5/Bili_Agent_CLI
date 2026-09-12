@@ -43,9 +43,14 @@ VIDEOS_PAYLOAD = {
             {
                 "bvid": "BV1favorite",
                 "title": "收藏的视频",
+                "intro": "收藏视频的简介",
                 "cover": "http://i0.hdslb.com/favorite.jpg",
                 "duration": 125,
                 "fav_time": 1_757_472_400,
+                "cnt_info": {
+                    "play": 12_345,
+                    "danmaku": 67,
+                },
                 "upper": {
                     "mid": 456,
                     "name": "测试UP主",
@@ -124,6 +129,10 @@ class FavoritesTest(unittest.TestCase):
         result = response.model_dump(mode="json")
         self.assertEqual(result["folder"]["id"], "1001")
         self.assertEqual(result["videos"][0]["folder_id"], "1001")
+        self.assertEqual(result["videos"][0]["description"], "收藏视频的简介")
+        self.assertEqual(result["videos"][0]["stats"]["views"], 12_345)
+        self.assertEqual(result["videos"][0]["stats"]["danmaku"], 67)
+        self.assertIsNone(result["videos"][0]["stats"]["likes"])
         self.assertEqual(
             result["videos"][0]["favorited_at"],
             "2025-09-10T02:46:40Z",

@@ -48,7 +48,16 @@ async def execute_tool(
             "error": "INVALID_TOOL_RESULT"
         }
 
+    try:
+        llm_result = definition.result_projector(result)
+
+    except ValidationError:
+        return {
+            "ok": False,
+            "error": "INVALID_LLM_TOOL_RESULT",
+        }
+
     return {
         "ok": True,
-        "data": result.model_dump(mode="json")
+        "data": llm_result.model_dump(mode="json"),
     }

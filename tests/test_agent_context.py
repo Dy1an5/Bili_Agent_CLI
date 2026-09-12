@@ -1,0 +1,631 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+from bili_agent_cli.agent.agent_loop import run_agent
+from bili_agent_cli.agent.context import (
+    ContextManager,
+    ContextSettings,
+    FileSessionStore,
+)
+
+
+class AgentContextTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.session_store = FileSessionStore(
+            directory=Path(self.temporary_directory.name) / "conversations",
+            ttl_seconds=3_600,
+            capacity=100,
+        )
+        self.store_patch = patch(
+            "bili_agent_cli.agent.agent_loop.session_store",
+            new=self.session_store,
+        )
+        self.store_patch.start()
+        self.addCleanup(self.store_patch.stop)
+
+    async def test_second_run_receives_first_completed_turn(self) -> None:
+        create_message = AsyncMock(
+            side_effect=[
+                {"role": "assistant", "content": "第一轮答案"},
+                {"role": "assistant", "content": "第二轮答案"},
+            ]
+        )
+
+        with patch(
+            "bili_agent_cli.agent.agent_loop.create_agent_message",
+            new=create_message,
+        ):
+            first = await run_agent("第一轮问题")
+            await run_agent("第二轮问题", first.session_id)
+
+        second_messages = create_message.await_args_list[1].kwargs["messages"]
+        self.assertEqual(
+            [message["role"] for message in second_messages],
+            ["system", "user", "assistant", "user"],
+        )
+        self.assertEqual(second_messages[1]["content"], "第一轮问题")
+        self.assertEqual(second_messages[2]["content"], "第一轮答案")
+
+    async def test_agent_reports_compaction(self) -> None:
+        manager = ContextManager(
+            ContextSettings(
+                max_input_units=5_000,
+                summarize_at_units=100,
+                recent_turns=1,
+                summary_max_tokens=100,
+                max_tool_result_units=1_000,
+            )
+        )
+        create_message = AsyncMock(
+            side_effect=[
+                {"role": "assistant", "content": "一" * 80},
+                {"role": "assistant", "content": "二" * 80},
+                {"role": "assistant", "content": "压缩后回答"},
+            ]
+        )
+        summarize = AsyncMock(return_value="历史摘要")
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.context_manager",
+                new=manager,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_conversation_summary",
+                new=summarize,
+            ),
+        ):
+            first = await run_agent("第一轮" * 20)
+            await run_agent("第二轮" * 20, first.session_id)
+            third = await run_agent("第三轮", first.session_id)
+
+        self.assertTrue(third.context_compacted)
+        summarize.assert_awaited_once()
+        third_messages = create_message.await_args_list[2].kwargs["messages"]
+        self.assertIn("历史摘要", third_messages[0]["content"])
+
+    async def test_agent_stores_visible_evidence_and_selected_sources(self) -> None:
+        manager = ContextManager(
+            ContextSettings(
+                max_input_units=20_000,
+                summarize_at_units=15_000,
+                recent_turns=1,
+                summary_max_tokens=100,
+                max_tool_result_units=700,
+            )
+        )
+        tool_result = {
+            "ok": True,
+            "data": {
+                "videos": [
+                    {
+                        "source_id": f"bilibili:video:BV{index}",
+                        "bvid": f"BV{index}",
+                        "title": f"视频 {index}",
+                        "description": "内容" * 80,
+                    }
+                    for index in range(8)
+                ]
+            },
+        }
+        create_message = AsyncMock(
+            side_effect=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "search_videos",
+                                "arguments": '{"keyword":"Python"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "submit-1",
+                            "function": {
+                                "name": "submit_agent_answer",
+                                "arguments": json.dumps(
+                                    {
+                                        "answer": "完成",
+                                        "source_ids": [
+                                            "bilibili:video:BV0"
+                                        ],
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            },
+                        }
+                    ],
+                },
+            ]
+        )
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.context_manager",
+                new=manager,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.execute_tool",
+                new=AsyncMock(return_value=tool_result),
+            ),
+        ):
+            response = await run_agent("搜索 Python")
+
+        self.assertEqual([source.bvid for source in response.sources], ["BV0"])
+        second_messages = create_message.await_args_list[1].kwargs["messages"]
+        tool_message = next(
+            message
+            for message in reversed(second_messages)
+            if message["role"] == "tool"
+        )
+        model_tool_result = json.loads(tool_message["content"])
+        self.assertTrue(model_tool_result["context_truncation"]["truncated"])
+        self.assertNotIn("BV7", json.dumps(model_tool_result))
+        session = await self.session_store.get(response.session_id)
+        self.assertEqual(
+            session.turns[-1].evidence_batches[0].result,
+            model_tool_result,
+        )
+
+    async def test_multiple_tools_create_batches_and_merge_source_tools(self) -> None:
+        create_message = AsyncMock(
+            side_effect=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "search-call",
+                            "function": {
+                                "name": "search_videos",
+                                "arguments": '{"keyword":"F1"}',
+                            },
+                        },
+                        {
+                            "id": "later-call",
+                            "function": {
+                                "name": "get_watch_later",
+                                "arguments": "{}",
+                            },
+                        },
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "submit-call",
+                            "function": {
+                                "name": "submit_agent_answer",
+                                "arguments": json.dumps(
+                                    {
+                                        "answer": "两个工具都找到了同一视频",
+                                        "source_ids": [
+                                            "bilibili:video:BV1shared"
+                                        ],
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                },
+            ]
+        )
+        execute = AsyncMock(
+            side_effect=[
+                {
+                    "ok": True,
+                    "data": {
+                        "videos": [
+                            {
+                                "source_id": "bilibili:video:BV1shared",
+                                "bvid": "BV1shared",
+                                "title": "搜索结果",
+                            }
+                        ],
+                        "page": 1,
+                        "page_size": 20,
+                        "has_more": False,
+                    },
+                },
+                {
+                    "ok": True,
+                    "data": {
+                        "videos": [
+                            {
+                                "source_id": "bilibili:video:BV1shared",
+                                "bvid": "BV1shared",
+                                "cid": "123",
+                                "title": "稍后再看结果",
+                            }
+                        ],
+                        "page": 1,
+                        "page_size": 20,
+                        "has_more": False,
+                    },
+                },
+            ]
+        )
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.execute_tool",
+                new=execute,
+            ),
+        ):
+            response = await run_agent("从多个位置找 F1")
+
+        self.assertEqual(len(response.sources), 1)
+        self.assertEqual(
+            response.sources[0].source_tools,
+            ["search_videos", "get_watch_later"],
+        )
+        self.assertEqual(response.sources[0].cid, "123")
+        session = await self.session_store.get(response.session_id)
+        self.assertEqual(
+            [batch.tool_name for batch in session.turns[-1].evidence_batches],
+            ["search_videos", "get_watch_later"],
+        )
+
+    async def test_unknown_submitted_source_is_rejected_then_retried(self) -> None:
+        create_message = AsyncMock(
+            side_effect=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "bad-submit",
+                            "function": {
+                                "name": "submit_agent_answer",
+                                "arguments": json.dumps(
+                                    {
+                                        "answer": "错误来源",
+                                        "source_ids": [
+                                            "bilibili:video:BVfake"
+                                        ],
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "good-submit",
+                            "function": {
+                                "name": "submit_agent_answer",
+                                "arguments": json.dumps(
+                                    {"answer": "已修正", "source_ids": []}
+                                ),
+                            },
+                        }
+                    ],
+                },
+            ]
+        )
+
+        with patch(
+            "bili_agent_cli.agent.agent_loop.create_agent_message",
+            new=create_message,
+        ):
+            response = await run_agent("普通问题")
+
+        retry_messages = create_message.await_args_list[1].kwargs["messages"]
+        error_message = next(
+            message
+            for message in reversed(retry_messages)
+            if message["role"] == "tool"
+        )
+        error = json.loads(error_message["content"])
+        self.assertEqual(error["error"], "UNKNOWN_SOURCE_IDS")
+        self.assertEqual(response.answer, "已修正")
+        self.assertEqual(response.sources, [])
+
+    async def test_final_answer_must_be_separate_from_data_tools(self) -> None:
+        create_message = AsyncMock(
+            side_effect=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "early-submit",
+                            "function": {
+                                "name": "submit_agent_answer",
+                                "arguments": json.dumps(
+                                    {"answer": "过早提交", "source_ids": []}
+                                ),
+                            },
+                        },
+                        {
+                            "id": "search-call",
+                            "function": {
+                                "name": "search_videos",
+                                "arguments": '{"keyword":"F1"}',
+                            },
+                        },
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "final-submit",
+                            "function": {
+                                "name": "submit_agent_answer",
+                                "arguments": json.dumps(
+                                    {
+                                        "answer": "正确提交",
+                                        "source_ids": [
+                                            "bilibili:video:BV1result"
+                                        ],
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                },
+            ]
+        )
+        tool_result = {
+            "ok": True,
+            "data": {
+                "videos": [
+                    {
+                        "source_id": "bilibili:video:BV1result",
+                        "bvid": "BV1result",
+                        "title": "工具结果",
+                    }
+                ],
+                "page": 1,
+                "page_size": 20,
+                "has_more": False,
+            },
+        }
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.execute_tool",
+                new=AsyncMock(return_value=tool_result),
+            ),
+        ):
+            response = await run_agent("搜索并回答")
+
+        retry_messages = create_message.await_args_list[1].kwargs["messages"]
+        tool_errors = [
+            json.loads(message["content"])
+            for message in retry_messages
+            if message["role"] == "tool"
+        ]
+        self.assertTrue(
+            any(
+                result.get("error") == "FINAL_ANSWER_MUST_BE_SUBMITTED_ALONE"
+                for result in tool_errors
+            )
+        )
+        self.assertEqual(response.answer, "正确提交")
+        self.assertEqual(
+            [source.bvid for source in response.sources],
+            ["BV1result"],
+        )
+        self.assertEqual(
+            [step.tool for step in response.trace],
+            ["search_videos"],
+        )
+
+    async def test_plain_answer_falls_back_to_trusted_bvids(self) -> None:
+        create_message = AsyncMock(
+            side_effect=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "search-call",
+                            "function": {
+                                "name": "search_videos",
+                                "arguments": '{"keyword":"F1"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": "推荐 BV1trusted123，同时忽略 BV1invented99。",
+                },
+            ]
+        )
+        tool_result = {
+            "ok": True,
+            "data": {
+                "videos": [
+                    {
+                        "source_id": "bilibili:video:BV1trusted123",
+                        "bvid": "BV1trusted123",
+                        "title": "可信视频",
+                    }
+                ],
+                "page": 1,
+                "page_size": 20,
+                "has_more": False,
+            },
+        }
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.execute_tool",
+                new=AsyncMock(return_value=tool_result),
+            ),
+        ):
+            response = await run_agent("搜索 F1")
+
+        self.assertEqual(
+            [source.bvid for source in response.sources],
+            ["BV1trusted123"],
+        )
+
+    async def test_next_turn_receives_following_pagination_state(self) -> None:
+        create_message = AsyncMock(
+            side_effect=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "get_following_feed",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                {"role": "assistant", "content": "还有下一页，要继续吗？"},
+                {"role": "assistant", "content": "继续后的回答"},
+            ]
+        )
+        tool_result = {
+            "ok": True,
+            "data": {
+                "items": [],
+                "has_more": True,
+                "next_offset": "opaque-next-offset",
+            },
+        }
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.execute_tool",
+                new=AsyncMock(return_value=tool_result),
+            ),
+        ):
+            first = await run_agent("查看关注动态")
+            await run_agent("继续", first.session_id)
+
+        next_turn_messages = create_message.await_args_list[2].kwargs["messages"]
+        previous_answer = next_turn_messages[-2]["content"]
+        self.assertIn("<pagination_state>", previous_answer)
+        self.assertIn("opaque-next-offset", previous_answer)
+
+    async def test_interrupted_turn_keeps_tool_evidence_for_retry(self) -> None:
+        session = await self.session_store.create()
+        create_message = AsyncMock(
+            side_effect=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-interrupted",
+                            "function": {
+                                "name": "get_following_feed",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                RuntimeError("provider failed after tool call"),
+                {"role": "assistant", "content": "已从中断位置继续"},
+            ]
+        )
+        tool_result = {
+            "ok": True,
+            "data": {
+                "items": [],
+                "has_more": True,
+                "next_offset": "saved-offset",
+            },
+        }
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.execute_tool",
+                new=AsyncMock(return_value=tool_result),
+            ),
+        ):
+            with self.assertRaises(RuntimeError):
+                await run_agent("查看动态", session.id)
+
+            interrupted = await self.session_store.get(session.id)
+            self.assertIsNotNone(interrupted.pending_turn)
+            self.assertEqual(interrupted.pending_turn.status, "interrupted")
+            self.assertEqual(len(interrupted.pending_turn.evidence_batches), 1)
+            self.assertEqual(
+                interrupted.pending_turn.pagination_states[0].next_arguments,
+                {"offset": "saved-offset"},
+            )
+            reloaded_store = FileSessionStore(
+                directory=self.session_store.directory,
+                ttl_seconds=3_600,
+                capacity=100,
+            )
+            reloaded = await reloaded_store.get(session.id)
+            self.assertIsNotNone(reloaded.pending_turn)
+            self.assertEqual(
+                reloaded.pending_turn.pagination_states[0].next_arguments,
+                {"offset": "saved-offset"},
+            )
+
+            await run_agent("继续", session.id)
+
+        retry_messages = create_message.await_args_list[2].kwargs["messages"]
+        self.assertIn("saved-offset", retry_messages[-2]["content"])
+        completed = await self.session_store.get(session.id)
+        self.assertIsNone(completed.pending_turn)
+        self.assertEqual(
+            [turn.status for turn in completed.turns[-2:]],
+            ["interrupted", "completed"],
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -12,6 +12,7 @@ from bili_agent_cli.bilibili.parsing import (
     read_int,
     read_non_empty_string,
     read_non_negative_int,
+    read_optional_non_negative_int,
     read_positive_id,
     read_positive_timestamp,
 )
@@ -20,6 +21,7 @@ from bili_agent_cli.bilibili.wbi import (
     fetch_wbi_mixin_key,
     sign_wbi_parameters,
 )
+from bili_agent_cli.schemas.common import VideoStats
 from bili_agent_cli.schemas.watch_later import (
     WatchLaterQuery,
     WatchLaterResponse,
@@ -72,6 +74,7 @@ def _parse_video(value: Any) -> WatchLaterVideo | None:
     avatar_url = (
         normalize_image_url(owner.get("face")) if owner else None
     ) or DEFAULT_AVATAR_URL
+    stats = as_record(video.get("stat"))
 
     return WatchLaterVideo(
         bvid=bvid,
@@ -85,6 +88,18 @@ def _parse_video(value: Any) -> WatchLaterVideo | None:
             mid=author_mid,
             name=author_name,
             avatar_url=avatar_url,
+        ),
+        stats=VideoStats(
+            views=(
+                read_optional_non_negative_int(stats.get("view"))
+                if stats
+                else None
+            ),
+            danmaku=(
+                read_optional_non_negative_int(stats.get("danmaku"))
+                if stats
+                else None
+            ),
         ),
     )
 

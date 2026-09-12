@@ -7,6 +7,10 @@ from collections.abc import Sequence
 
 import httpx
 
+from bili_agent_cli.agent.context import (
+    ContextBudgetExceededError,
+    SessionNotFoundError,
+)
 from bili_agent_cli.agent.deepseek.errors import ModelCallError
 from bili_agent_cli.bilibili.auth import BilibiliLoginError
 from bili_agent_cli.bilibili.debug import BilibiliDebugError
@@ -34,8 +38,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     except (
         BilibiliDebugError,
         BilibiliLoginError,
+        ContextBudgetExceededError,
         ModelCallError,
         ProfileError,
+        SessionNotFoundError,
         httpx.RequestError,
     ) as error:
         print(f"错误：{error}", file=sys.stderr)

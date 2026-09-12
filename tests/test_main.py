@@ -8,7 +8,11 @@ from uuid import uuid4
 import httpx
 
 from bili_agent_cli.main import app
-from bili_agent_cli.agent.models import AgentRunResponse
+from bili_agent_cli.agent.context import (
+    ContextBudgetExceededError,
+    SessionNotFoundError,
+)
+from bili_agent_cli.agent.models import AgentRunResponse, AgentSource
 from bili_agent_cli.schemas.favorites import (
     FavoriteFolder,
     FavoriteFolderListResponse,
@@ -54,6 +58,15 @@ class MainTest(unittest.TestCase):
         ) as client:
             return await client.post(path, json=payload)
 
+    async def _delete(self, path: str) -> httpx.Response:
+        transport = httpx.ASGITransport(app=app)
+
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            return await client.delete(path)
+
     def test_health(self) -> None:
         response = asyncio.run(self._request("/health"))
 
@@ -66,6 +79,13 @@ class MainTest(unittest.TestCase):
         result = AgentRunResponse(
             answer="测试回答",
             session_id=session_id,
+            sources=[
+                AgentSource(
+                    bvid="BV1source",
+                    title="引用视频",
+                    source_tools=["search_videos"],
+                )
+            ],
         )
 
         with patch(
@@ -82,7 +102,80 @@ class MainTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["answer"], "测试回答")
         self.assertEqual(response.json()["session_id"], str(session_id))
+        self.assertEqual(
+            response.json()["sources"][0]["source_id"],
+            "bilibili:video:BV1source",
+        )
+        self.assertEqual(
+            response.json()["sources"][0]["source_tools"],
+            ["search_videos"],
+        )
         run_mock.assert_awaited_once_with("测试问题", None)
+
+    def test_missing_agent_session_returns_404(self) -> None:
+        with patch(
+            "bili_agent_cli.routes.agent.run_agent",
+            new=AsyncMock(side_effect=SessionNotFoundError),
+        ):
+            response = asyncio.run(
+                self._post(
+                    "/agent/run",
+                    {"task": "继续会话", "session_id": str(uuid4())},
+                )
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.json(),
+            {"detail": {"code": "SESSION_NOT_FOUND"}},
+        )
+
+    def test_oversized_agent_context_returns_413(self) -> None:
+        with patch(
+            "bili_agent_cli.routes.agent.run_agent",
+            new=AsyncMock(side_effect=ContextBudgetExceededError),
+        ):
+            response = asyncio.run(
+                self._post(
+                    "/agent/run",
+                    {"task": "超大上下文", "session_id": None},
+                )
+            )
+
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(
+            response.json(),
+            {"detail": {"code": "CONTEXT_BUDGET_EXCEEDED"}},
+        )
+
+    def test_delete_agent_session_returns_204(self) -> None:
+        session_id = uuid4()
+        with patch(
+            "bili_agent_cli.routes.agent.session_store.delete",
+            new=AsyncMock(return_value=None),
+        ) as delete_mock:
+            response = asyncio.run(
+                self._delete(f"/agent/sessions/{session_id}")
+            )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.content, b"")
+        delete_mock.assert_awaited_once_with(session_id)
+
+    def test_delete_missing_agent_session_returns_404(self) -> None:
+        with patch(
+            "bili_agent_cli.routes.agent.session_store.delete",
+            new=AsyncMock(side_effect=SessionNotFoundError),
+        ):
+            response = asyncio.run(
+                self._delete(f"/agent/sessions/{uuid4()}")
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.json(),
+            {"detail": {"code": "SESSION_NOT_FOUND"}},
+        )
 
     def test_following_route_returns_response_model(self) -> None:
         parsed_response = FollowingFeedResponse.model_validate(

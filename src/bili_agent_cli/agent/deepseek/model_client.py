@@ -4,6 +4,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from .config import (
+    AGENT_MAX_OUTPUT_TOKENS,
     DEEPSEEK_URL,
     DEEPSEEK_MODEL,
     load_api_key
@@ -152,6 +153,7 @@ async def create_agent_message(
         "messages": messages,
         "tools": tools,
         "tool_choice": "auto",
+        "max_tokens": AGENT_MAX_OUTPUT_TOKENS,
     }
 
     headers = build_headers(api_key)

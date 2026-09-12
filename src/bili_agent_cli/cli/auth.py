@@ -38,7 +38,7 @@ def register_commands(subparsers: argparse._SubParsersAction) -> None:
 
     profile_parser = subparsers.add_parser(
         "profile",
-        help="安全检查 privacy/profile.txt 登录资料",
+        help="安全检查 secret/profile.txt 登录资料",
     )
     profile_parser.set_defaults(handler=run_profile)
 

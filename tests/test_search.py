@@ -130,6 +130,42 @@ class SearchVideoTest(unittest.TestCase):
         self.assertEqual(result["total_count"], 21)
         self.assertTrue(result["has_more"])
 
+    def test_missing_search_stats_are_unknown_instead_of_zero(self) -> None:
+        raw_video = dict(SEARCH_PAYLOAD["data"]["result"][0])
+        for key in ("play", "danmaku", "favorite", "review", "like"):
+            raw_video.pop(key)
+        payload = {
+            "code": 0,
+            "message": "0",
+            "data": {"numResults": 1, "result": [raw_video]},
+        }
+
+        async def run_scenario():
+            def handle_request(request: httpx.Request) -> httpx.Response:
+                if request.url.path == "/x/web-interface/nav":
+                    return httpx.Response(200, json=NAV_PAYLOAD)
+                return httpx.Response(200, json=payload)
+
+            transport = httpx.MockTransport(handle_request)
+            async with httpx.AsyncClient(transport=transport) as client:
+                return await search_videos(
+                    SearchVideoQuery(keyword="Python"),
+                    "SESSDATA=test",
+                    client,
+                )
+
+        response = asyncio.run(run_scenario())
+        self.assertEqual(
+            response.videos[0].stats.model_dump(),
+            {
+                "views": None,
+                "danmaku": None,
+                "favorites": None,
+                "replies": None,
+                "likes": None,
+            },
+        )
+
     def test_reports_gaia_risk_control(self) -> None:
         async def run_scenario() -> None:
             def handle_request(request: httpx.Request) -> httpx.Response:

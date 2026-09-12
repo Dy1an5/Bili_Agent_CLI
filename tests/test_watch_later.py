@@ -42,6 +42,10 @@ WATCH_LATER_PAYLOAD = {
                 "duration": 300,
                 "progress": -1,
                 "pubdate": 1_757_472_400,
+                "stat": {
+                    "view": 23_456,
+                    "danmaku": 89,
+                },
                 "owner": {
                     "mid": 456,
                     "name": "测试UP主",
@@ -118,6 +122,9 @@ class WatchLaterTest(unittest.TestCase):
         self.assertEqual(result["videos"][0]["bvid"], "BV1later")
         self.assertEqual(result["videos"][0]["cid"], "789")
         self.assertEqual(result["videos"][0]["progress_seconds"], -1)
+        self.assertEqual(result["videos"][0]["stats"]["views"], 23_456)
+        self.assertEqual(result["videos"][0]["stats"]["danmaku"], 89)
+        self.assertIsNone(result["videos"][0]["stats"]["favorites"])
         self.assertEqual(
             result["videos"][0]["published_at"],
             "2025-09-10T02:46:40Z",

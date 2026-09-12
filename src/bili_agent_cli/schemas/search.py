@@ -12,6 +12,8 @@ from pydantic import (
     model_validator,
 )
 
+from bili_agent_cli.schemas.common import VideoStats
+
 
 SearchKeyword = Annotated[
     str,
@@ -93,12 +95,8 @@ class SearchVideoAuthor(BaseModel):
     avatar_url: str
 
 
-class SearchVideoStats(BaseModel):
-    views: int
-    danmaku: int
-    favorites: int
-    replies: int
-    likes: int
+class SearchVideoStats(VideoStats):
+    pass
 
 
 class SearchVideoItem(BaseModel):

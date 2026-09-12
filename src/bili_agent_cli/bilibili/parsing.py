@@ -42,6 +42,16 @@ def read_non_negative_int(value: Any, default: int = 0) -> int:
     return default
 
 
+def read_optional_non_negative_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+
+    return None
+
+
 def read_int(value: Any, default: int = 0) -> int:
     if isinstance(value, int) and not isinstance(value, bool):
         return value

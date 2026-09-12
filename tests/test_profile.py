@@ -19,10 +19,10 @@ from bili_agent_cli.profile import (
 
 
 class ProfileTest(unittest.TestCase):
-    def test_profile_path_is_inside_privacy_directory(self) -> None:
+    def test_profile_path_is_inside_secret_directory(self) -> None:
         self.assertEqual(
             profile_module.PROFILE_PATH,
-            profile_module.PROJECT_ROOT / "privacy" / "profile.txt",
+            profile_module.PROJECT_ROOT / "secret" / "profile.txt",
         )
 
     def test_parse_and_serialize_login_cookies(self) -> None:
@@ -57,7 +57,7 @@ class ProfileTest(unittest.TestCase):
     def test_saves_profile_with_private_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             project_root = Path(temporary_directory)
-            profile_path = project_root / "privacy" / "profile.txt"
+            profile_path = project_root / "secret" / "profile.txt"
             cookies = {
                 "SESSDATA": "session-value",
                 "bili_jct": "csrf-value",

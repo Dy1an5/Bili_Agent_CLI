@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from bili_agent_cli.schemas.common import VideoStats
+
 
 class WatchLaterQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -28,6 +30,7 @@ class WatchLaterVideo(BaseModel):
     progress_seconds: int
     published_at: datetime
     author: WatchLaterVideoAuthor
+    stats: VideoStats = Field(default_factory=VideoStats)
 
 
 class WatchLaterResponse(BaseModel):

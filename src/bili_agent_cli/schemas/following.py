@@ -17,11 +17,24 @@ class FollowingAuthor(BaseModel):
     avatar_url: str
 
 
+class FollowingVideoStats(BaseModel):
+    views: str | None = None
+    danmaku: str | None = None
+
+
+class FollowingDynamicStats(BaseModel):
+    likes: int | None = Field(default=None, ge=0)
+    replies: int | None = Field(default=None, ge=0)
+    reposts: int | None = Field(default=None, ge=0)
+    favorites: int | None = Field(default=None, ge=0)
+
+
 class FollowingVideo(BaseModel):
     bvid: str
     cid: str | None
     title: str
     cover_url: str
+    stats: FollowingVideoStats = Field(default_factory=FollowingVideoStats)
 
 
 class FollowingVideoItem(BaseModel):
@@ -29,12 +42,16 @@ class FollowingVideoItem(BaseModel):
     published_at: datetime
     author: FollowingAuthor
     video: FollowingVideo
+    dynamic_stats: FollowingDynamicStats = Field(
+        default_factory=FollowingDynamicStats
+    )
 
 
 class FollowingFeedResponse(BaseModel):
     items: list[FollowingVideoItem]
     has_more: bool
     next_offset: str | None
+
 
 class FollowingNotFoundError(Exception):
     pass

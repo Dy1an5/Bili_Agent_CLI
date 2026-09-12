@@ -14,6 +14,7 @@ from bili_agent_cli.bilibili.parsing import (
     normalize_image_url,
     read_non_empty_string,
     read_non_negative_int,
+    read_optional_non_negative_int,
     read_positive_id,
     read_positive_timestamp,
 )
@@ -126,11 +127,11 @@ def _parse_video(value: Any) -> SearchVideoItem | None:
             ),
         ),
         stats=SearchVideoStats(
-            views=read_non_negative_int(video.get("play")),
-            danmaku=read_non_negative_int(video.get("danmaku")),
-            favorites=read_non_negative_int(video.get("favorite")),
-            replies=read_non_negative_int(video.get("review")),
-            likes=read_non_negative_int(video.get("like")),
+            views=read_optional_non_negative_int(video.get("play")),
+            danmaku=read_optional_non_negative_int(video.get("danmaku")),
+            favorites=read_optional_non_negative_int(video.get("favorite")),
+            replies=read_optional_non_negative_int(video.get("review")),
+            likes=read_optional_non_negative_int(video.get("like")),
         ),
     )
 

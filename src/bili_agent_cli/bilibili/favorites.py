@@ -11,9 +11,11 @@ from bili_agent_cli.bilibili.parsing import (
     normalize_image_url,
     read_non_empty_string,
     read_non_negative_int,
+    read_optional_non_negative_int,
     read_positive_id,
     read_positive_timestamp,
 )
+from bili_agent_cli.schemas.common import VideoStats
 from bili_agent_cli.schemas.favorites import (
     FavoriteFolder,
     FavoriteFolderListResponse,
@@ -137,11 +139,13 @@ def _parse_video(value: Any, folder_id: str) -> FavoriteVideo | None:
     avatar_url = (
         normalize_image_url(upper.get("face")) if upper else None
     ) or DEFAULT_AVATAR_URL
+    count_info = as_record(video.get("cnt_info"))
 
     return FavoriteVideo(
         folder_id=folder_id,
         bvid=bvid,
         title=title,
+        description=read_non_empty_string(video.get("intro")),
         cover_url=cover_url,
         duration_seconds=read_non_negative_int(video.get("duration")),
         favorited_at=read_positive_timestamp(video.get("fav_time")),
@@ -149,6 +153,18 @@ def _parse_video(value: Any, folder_id: str) -> FavoriteVideo | None:
             mid=author_mid,
             name=author_name,
             avatar_url=avatar_url,
+        ),
+        stats=VideoStats(
+            views=(
+                read_optional_non_negative_int(count_info.get("play"))
+                if count_info
+                else None
+            ),
+            danmaku=(
+                read_optional_non_negative_int(count_info.get("danmaku"))
+                if count_info
+                else None
+            ),
         ),
     )
 

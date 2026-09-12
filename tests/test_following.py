@@ -34,8 +34,18 @@ FOLLOWING_PAYLOAD = {
                                 "bvid": "BV1test",
                                 "title": "测试视频",
                                 "cover": "http://i0.hdslb.com/cover.jpg",
+                                "stat": {
+                                    "play": "1.2万",
+                                    "danmaku": "345",
+                                },
                             },
                         }
+                    },
+                    "module_stat": {
+                        "like": {"count": 101, "status": False},
+                        "comment": {"count": 20, "status": False},
+                        "forward": {"count": 3, "status": False},
+                        "favorite": {"count": 9, "status": False},
                     },
                 },
             }
@@ -63,6 +73,16 @@ EXPECTED_FOLLOWING_RESPONSE = {
                 "cid": None,
                 "title": "测试视频",
                 "cover_url": "https://i0.hdslb.com/cover.jpg",
+                "stats": {
+                    "views": "1.2万",
+                    "danmaku": "345",
+                },
+            },
+            "dynamic_stats": {
+                "likes": 101,
+                "replies": 20,
+                "reposts": 3,
+                "favorites": 9,
             },
         }
     ],
