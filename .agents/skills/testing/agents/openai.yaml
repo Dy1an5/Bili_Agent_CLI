@@ -1,0 +1,7 @@
+interface:
+  display_name: "项目测试规范"
+  short_description: "按代码改动范围选择定向 pytest，并在交付前执行完整回归测试"
+  default_prompt: "使用 $testing 为这次代码修改执行测试与回归检查。"
+
+policy:
+  allow_implicit_invocation: false

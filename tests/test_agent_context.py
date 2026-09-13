@@ -12,6 +12,17 @@ from bili_agent_cli.agent.context import (
     ContextSettings,
     FileSessionStore,
 )
+from bili_agent_cli.agent.memory.models import (
+    MemoryCandidate,
+    MemoryExtraction,
+    MemorySourceType,
+)
+from bili_agent_cli.agent.memory.store import (
+    MemoryStorageError,
+    MemoryStore,
+)
+from bili_agent_cli.agent.models import AgentMemoryStatus
+from bili_agent_cli.agent.deepseek.errors import ProviderTimeoutError
 
 
 class AgentContextTest(unittest.IsolatedAsyncioTestCase):
@@ -29,6 +40,218 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
         )
         self.store_patch.start()
         self.addCleanup(self.store_patch.stop)
+
+        self.memory_store = MemoryStore(
+            Path(self.temporary_directory.name) / "memory.db"
+        )
+        self.memory_store_patch = patch(
+            "bili_agent_cli.agent.agent_loop.memory_store",
+            new=self.memory_store,
+        )
+        self.memory_store_patch.start()
+        self.addCleanup(self.memory_store_patch.stop)
+
+        self.memory_extraction = AsyncMock(
+            return_value=MemoryExtraction(candidates=[])
+        )
+        self.memory_extraction_patch = patch(
+            "bili_agent_cli.agent.agent_loop.create_memory_extraction",
+            new=self.memory_extraction,
+        )
+        self.memory_extraction_patch.start()
+        self.addCleanup(self.memory_extraction_patch.stop)
+
+    async def test_relevant_memory_is_injected_into_system_prompt(self) -> None:
+        remembered = self.memory_store.remember(
+            MemoryCandidate(
+                key="recommendation.f1.level",
+                kind="constraint",
+                content="推荐 F1 时不要提供入门规则视频",
+                topics=["f1"],
+                confidence=1.0,
+            ),
+            source_type=MemorySourceType.USER,
+            source_ref=None,
+        )
+        create_message = AsyncMock(
+            return_value={"role": "assistant", "content": "回答"}
+        )
+
+        with patch(
+            "bili_agent_cli.agent.agent_loop.create_agent_message",
+            new=create_message,
+        ):
+            await run_agent("推荐 F1 视频")
+
+        messages = create_message.await_args.kwargs["messages"]
+        system_content = messages[0]["content"]
+        self.assertIn("<long_term_memories>", system_content)
+        self.assertIn(str(remembered.id), system_content)
+        self.assertIn("不要提供入门规则视频", system_content)
+        self.assertEqual(
+            messages[-1],
+            {"role": "user", "content": "推荐 F1 视频"},
+        )
+
+    async def test_memory_failure_does_not_block_agent(self) -> None:
+        create_message = AsyncMock(
+            return_value={"role": "assistant", "content": "正常回答"}
+        )
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.retrieve_memories",
+                side_effect=MemoryStorageError("database unavailable"),
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+        ):
+            response = await run_agent("普通问题")
+
+        self.assertEqual(response.answer, "正常回答")
+        messages = create_message.await_args.kwargs["messages"]
+        self.assertNotIn("<long_term_memories>", messages[0]["content"])
+        self.assertEqual(
+            messages[-1],
+            {"role": "user", "content": "普通问题"},
+        )
+
+    async def test_completed_turn_is_extracted_into_memory_store(self) -> None:
+        candidate = MemoryCandidate(
+            key="response.length",
+            kind="constraint",
+            content="以后回答保持简短",
+            topics=["回答风格"],
+            confidence=1.0,
+        )
+        self.memory_extraction.return_value = MemoryExtraction(
+            candidates=[candidate]
+        )
+        create_message = AsyncMock(
+            return_value={"role": "assistant", "content": "已经记住"}
+        )
+
+        with patch(
+            "bili_agent_cli.agent.agent_loop.create_agent_message",
+            new=create_message,
+        ):
+            response = await run_agent("以后回答保持简短")
+
+        memories = self.memory_store.list_memories()
+        self.assertEqual(len(memories), 1)
+        self.assertEqual(memories[0].key, "response.length")
+        self.assertEqual(
+            memories[0].source_type,
+            MemorySourceType.CONVERSATION,
+        )
+        self.assertEqual(response.memory.status, AgentMemoryStatus.SAVED)
+        self.assertEqual(response.memory.saved_count, 1)
+
+        session = await self.session_store.get(response.session_id)
+        completed_turn = session.turns[-1]
+        self.assertEqual(completed_turn.status, "completed")
+        self.assertEqual(
+            memories[0].source_ref,
+            f"session:{session.id}:turn:{completed_turn.id}",
+        )
+
+        extraction_input = json.loads(
+            self.memory_extraction.await_args.args[0]
+        )
+        self.assertEqual(
+            extraction_input["user_content"],
+            "以后回答保持简短",
+        )
+        self.assertEqual(extraction_input["assistant_content"], "已经记住")
+        self.assertEqual(extraction_input["session_id"], str(session.id))
+        self.assertEqual(extraction_input["turn_id"], str(completed_turn.id))
+
+    async def test_extraction_failure_keeps_completed_answer(self) -> None:
+        self.memory_extraction.side_effect = ProviderTimeoutError(
+            "memory extraction timeout"
+        )
+        create_message = AsyncMock(
+            return_value={"role": "assistant", "content": "回答仍然成功"}
+        )
+
+        with patch(
+            "bili_agent_cli.agent.agent_loop.create_agent_message",
+            new=create_message,
+        ):
+            response = await run_agent("这是一个问题")
+
+        self.assertEqual(response.answer, "回答仍然成功")
+        self.assertEqual(
+            response.memory.status,
+            AgentMemoryStatus.EXTRACTION_FAILED,
+        )
+        self.assertEqual(
+            response.memory.error_code,
+            "ProviderTimeoutError",
+        )
+        self.assertEqual(self.memory_store.list_memories(), [])
+        session = await self.session_store.get(response.session_id)
+        self.assertEqual(session.turns[-1].status, "completed")
+        self.assertEqual(
+            session.turns[-1].assistant_content,
+            "回答仍然成功",
+        )
+
+    async def test_empty_extraction_is_reported(self) -> None:
+        create_message = AsyncMock(
+            return_value={"role": "assistant", "content": "普通回答"}
+        )
+
+        with patch(
+            "bili_agent_cli.agent.agent_loop.create_agent_message",
+            new=create_message,
+        ):
+            response = await run_agent("今天天气不错")
+
+        self.assertEqual(
+            response.memory.status,
+            AgentMemoryStatus.NO_CANDIDATES,
+        )
+        self.assertEqual(response.memory.saved_count, 0)
+        self.assertIsNone(response.memory.error_code)
+
+    async def test_storage_failure_is_reported(self) -> None:
+        self.memory_extraction.return_value = MemoryExtraction(
+            candidates=[
+                MemoryCandidate(
+                    key="response.length",
+                    kind="constraint",
+                    content="以后回答保持简短",
+                    topics=["回答风格"],
+                    confidence=1.0,
+                )
+            ]
+        )
+        create_message = AsyncMock(
+            return_value={"role": "assistant", "content": "已处理"}
+        )
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch.object(
+                self.memory_store,
+                "remember",
+                side_effect=MemoryStorageError("database unavailable"),
+            ),
+        ):
+            response = await run_agent("以后回答保持简短")
+
+        self.assertEqual(
+            response.memory.status,
+            AgentMemoryStatus.STORAGE_FAILED,
+        )
+        self.assertEqual(response.memory.saved_count, 0)
+        self.assertEqual(response.memory.error_code, "MemoryStorageError")
 
     async def test_second_run_receives_first_completed_turn(self) -> None:
         create_message = AsyncMock(

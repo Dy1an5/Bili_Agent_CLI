@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from uuid import UUID
 
 from pydantic import (
@@ -81,9 +82,25 @@ class AgentStep(BaseModel):
     ok: bool
 
 
+class AgentMemoryStatus(StrEnum):
+    NOT_ATTEMPTED = "not_attempted"
+    SAVED = "saved"
+    NO_CANDIDATES = "no_candidates"
+    FILTERED = "filtered"
+    EXTRACTION_FAILED = "extraction_failed"
+    STORAGE_FAILED = "storage_failed"
+
+
+class AgentMemoryResult(BaseModel):
+    status: AgentMemoryStatus = AgentMemoryStatus.NOT_ATTEMPTED
+    saved_count: int = Field(default=0, ge=0)
+    error_code: str | None = None
+
+
 class AgentRunResponse(BaseModel):
     answer: str
     session_id: UUID
     context_compacted: bool = False
     sources: list[AgentSource] = Field(default_factory=list)
     trace: list[AgentStep] = Field(default_factory=list)
+    memory: AgentMemoryResult = Field(default_factory=AgentMemoryResult)

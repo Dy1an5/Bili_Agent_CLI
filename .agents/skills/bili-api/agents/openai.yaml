@@ -1,0 +1,7 @@
+interface:
+  display_name: "Bili API 规范"
+  short_description: "规范 B 站接口、FastAPI 路由与 Pydantic 模型"
+  default_prompt: "使用 $bili-api 实现或审查一个 B 站 API 功能。"
+
+policy:
+  allow_implicit_invocation: false

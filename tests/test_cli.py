@@ -9,7 +9,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
-from bili_agent_cli.agent.models import AgentRunResponse
+from bili_agent_cli.agent.models import (
+    AgentMemoryResult,
+    AgentMemoryStatus,
+    AgentRunResponse,
+)
 from bili_agent_cli.agent.context import (
     AgentEvidenceBatch,
     ConversationSession,
@@ -86,6 +90,62 @@ class AgentCliTest(unittest.TestCase):
 
         self.assertEqual(model.await_args_list[0].args, ("第一轮", None))
         self.assertEqual(model.await_args_list[1].args, ("第二轮", session_id))
+
+    def test_chat_reports_memory_save_result(self) -> None:
+        session_id = uuid4()
+        model = AsyncMock(
+            return_value=AgentRunResponse(
+                answer="已经处理",
+                session_id=session_id,
+                memory=AgentMemoryResult(
+                    status=AgentMemoryStatus.SAVED,
+                    saved_count=1,
+                ),
+            )
+        )
+        output = StringIO()
+
+        with (
+            patch(
+                "bili_agent_cli.cli.agent._read_task",
+                new=AsyncMock(side_effect=["记住偏好", "/exit"]),
+            ),
+            patch("bili_agent_cli.cli.agent.run_agent", new=model),
+            patch("sys.stdout", output),
+        ):
+            asyncio.run(run_agent_chat(argparse.Namespace()))
+
+        self.assertIn("记忆> 已保存 1 条长期记忆。", output.getvalue())
+
+    def test_chat_reports_memory_extraction_failure(self) -> None:
+        session_id = uuid4()
+        model = AsyncMock(
+            return_value=AgentRunResponse(
+                answer="主回答仍成功",
+                session_id=session_id,
+                memory=AgentMemoryResult(
+                    status=AgentMemoryStatus.EXTRACTION_FAILED,
+                    error_code="ProviderResponseError",
+                ),
+            )
+        )
+        errors = StringIO()
+
+        with (
+            patch(
+                "bili_agent_cli.cli.agent._read_task",
+                new=AsyncMock(side_effect=["记住偏好", "/exit"]),
+            ),
+            patch("bili_agent_cli.cli.agent.run_agent", new=model),
+            patch("sys.stdout", new_callable=StringIO),
+            patch("sys.stderr", errors),
+        ):
+            asyncio.run(run_agent_chat(argparse.Namespace()))
+
+        self.assertIn(
+            "记忆> 保存失败（ProviderResponseError）。",
+            errors.getvalue(),
+        )
 
     def test_new_command_resets_session_id(self) -> None:
         first_session_id = uuid4()

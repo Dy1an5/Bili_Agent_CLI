@@ -110,6 +110,14 @@ class MainTest(unittest.TestCase):
         self.assertEqual(response.json()["answer"], "测试回答")
         self.assertEqual(response.json()["session_id"], str(session_id))
         self.assertEqual(
+            response.json()["memory"],
+            {
+                "status": "not_attempted",
+                "saved_count": 0,
+                "error_code": None,
+            },
+        )
+        self.assertEqual(
             response.json()["sources"][0]["source_id"],
             "bilibili:video:BV1source",
         )

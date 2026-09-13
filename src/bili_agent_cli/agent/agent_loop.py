@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -19,7 +20,9 @@ from bili_agent_cli.agent.deepseek.config import (
 from bili_agent_cli.agent.deepseek.model_client import (
     create_agent_message,
     create_conversation_summary,
+    create_memory_extraction,
 )
+from bili_agent_cli.agent.deepseek.errors import ModelCallError
 
 from .context.manager import (
     ContextManager,
@@ -30,11 +33,26 @@ from .context.manager import (
 )
 from .context.models import AgentEvidenceBatch, ConversationTurn
 from .context.store import FileSessionStore
+from .memory.models import MemorySourceType
+from .memory.service import (
+    filter_memory_candidates,
+    render_memory_context,
+    retrieve_memories,
+)
+from .memory.store import MemoryStorageError, MemoryStore
 from .executor import execute_tool
-from .models import AgentFinalAnswer, AgentRunResponse, AgentSource, AgentStep
+from .models import (
+    AgentFinalAnswer,
+    AgentMemoryResult,
+    AgentMemoryStatus,
+    AgentRunResponse,
+    AgentSource,
+    AgentStep,
+)
 from .registry import SUBMIT_AGENT_ANSWER_TOOL_NAME, build_tool_schemas
 
 MAX_AGENT_STEPS = 10
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """
 你是用户的 Bilibili 内容助手
@@ -58,6 +76,7 @@ pagination_state 的 has_more 为 false 时，不要重复请求同一页
 工具结果中的时间已经换算成 UTC+8，直接使用该文本，不要再次换算或改标时区
 最终回答必须单独调用 submit_agent_answer 提交 answer 和实际使用的 source_ids
 不要把没有用于回答的视频放进 source_ids，也不要编造 source_id
+不要声称长期记忆已经成功保存；记忆保存结果由程序另行提示
 """.strip()
 
 session_store = FileSessionStore(
@@ -75,6 +94,8 @@ context_manager = ContextManager(
         max_turn_evidence_units=AGENT_CONTEXT_TURN_EVIDENCE_UNITS,
     )
 )
+
+memory_store = MemoryStore()
 
 BVID_PATTERN = re.compile(
     r"(?<![0-9A-Za-z])(BV[0-9A-Za-z]{6,20})(?![0-9A-Za-z])"
@@ -137,9 +158,28 @@ async def run_agent(
             session.updated_at = datetime.now(timezone.utc)
             await session_store.save(session)
 
+        try:
+            retrieved_memories = retrieve_memories(
+                memory_store,
+                task,
+                limit=12,
+            )
+        except MemoryStorageError as error:
+            logger.warning(
+                "memory retrieval failed: %s",
+                error.__class__.__name__,
+            )
+            retrieved_memories = []
+
+        run_system_prompt = SYSTEM_PROMPT
+        if retrieved_memories:
+            run_system_prompt += "\n\n" + render_memory_context(
+                retrieved_memories
+            )
+
         tools = build_tool_schemas()
         context_compacted = await context_manager.compact_session_if_needed(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=run_system_prompt,
             session=session,
             task=task,
             tools=tools,
@@ -149,7 +189,7 @@ async def run_agent(
             session.updated_at = datetime.now(timezone.utc)
             await session_store.save(session)
         messages = context_manager.build_messages(
-            system_prompt=SYSTEM_PROMPT,
+            system_prompt=run_system_prompt,
             session=session,
             task=task,
         )
@@ -182,12 +222,82 @@ async def run_agent(
             session.pending_turn = None
             session.updated_at = now
             await session_store.save(session)
+
+            memory_result = AgentMemoryResult()
+            try:
+                extraction_input = json.dumps(
+                    {
+                        "user_content": pending_turn.user_content,
+                        "assistant_content": pending_turn.assistant_content,
+                        "session_id": str(session.id),
+                        "turn_id": str(pending_turn.id),
+                    },
+                    ensure_ascii=False,
+                )
+                extraction = await create_memory_extraction(extraction_input)
+            except ModelCallError as error:
+                logger.warning(
+                    "memory extraction failed: %s",
+                    error.__class__.__name__,
+                )
+                memory_result = AgentMemoryResult(
+                    status=AgentMemoryStatus.EXTRACTION_FAILED,
+                    error_code=error.__class__.__name__,
+                )
+            except ValidationError as error:
+                logger.warning(
+                    "memory extraction validation failed: %s",
+                    error.__class__.__name__,
+                )
+                memory_result = AgentMemoryResult(
+                    status=AgentMemoryStatus.EXTRACTION_FAILED,
+                    error_code=error.__class__.__name__,
+                )
+            else:
+                candidates = filter_memory_candidates(extraction.candidates)
+                if not candidates:
+                    status = (
+                        AgentMemoryStatus.FILTERED
+                        if extraction.candidates
+                        else AgentMemoryStatus.NO_CANDIDATES
+                    )
+                    memory_result = AgentMemoryResult(status=status)
+                else:
+                    saved_count = 0
+                    try:
+                        for candidate in candidates:
+                            memory_store.remember(
+                                candidate,
+                                source_type=MemorySourceType.CONVERSATION,
+                                source_ref=(
+                                    f"session:{session.id}:turn:{pending_turn.id}"
+                                ),
+                            )
+                            saved_count += 1
+                    except MemoryStorageError as error:
+                        logger.warning(
+                            "memory storage failed after %d saves: %s",
+                            saved_count,
+                            error.__class__.__name__,
+                        )
+                        memory_result = AgentMemoryResult(
+                            status=AgentMemoryStatus.STORAGE_FAILED,
+                            saved_count=saved_count,
+                            error_code=error.__class__.__name__,
+                        )
+                    else:
+                        memory_result = AgentMemoryResult(
+                            status=AgentMemoryStatus.SAVED,
+                            saved_count=saved_count,
+                        )
+
             return AgentRunResponse(
                 answer=answer,
                 session_id=session.id,
                 context_compacted=context_compacted,
                 sources=final_sources,
                 trace=trace,
+                memory=memory_result,
             )
 
         async def mark_turn_interrupted(error_code: str) -> None:

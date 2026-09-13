@@ -13,6 +13,7 @@ from bili_agent_cli.agent.context import (
     SessionStorageError,
 )
 from bili_agent_cli.agent.deepseek.errors import ModelCallError
+from bili_agent_cli.agent.models import AgentMemoryResult, AgentMemoryStatus
 
 
 if TYPE_CHECKING:
@@ -123,6 +124,27 @@ async def run(arguments: argparse.Namespace) -> None:
 
         session_id = response.session_id
         print(f"助手> {response.answer}")
+        _print_memory_result(response.memory)
+
+
+def _print_memory_result(result: AgentMemoryResult) -> None:
+    if result.status == AgentMemoryStatus.NOT_ATTEMPTED:
+        return
+
+    if result.status == AgentMemoryStatus.SAVED:
+        print(f"记忆> 已保存 {result.saved_count} 条长期记忆。")
+        return
+
+    if result.status == AgentMemoryStatus.NO_CANDIDATES:
+        print("记忆> 本轮未提取到需要长期保存的信息。")
+        return
+
+    if result.status == AgentMemoryStatus.FILTERED:
+        print("记忆> 候选内容被安全规则过滤，未保存。", file=sys.stderr)
+        return
+
+    detail = result.error_code or result.status.value
+    print(f"记忆> 保存失败（{detail}）。", file=sys.stderr)
 
 
 def _format_chat_error(error: Exception) -> str:

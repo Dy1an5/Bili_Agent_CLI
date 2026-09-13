@@ -1,0 +1,7 @@
+interface:
+  display_name: "Agent Tool 规范"
+  short_description: "确保新增 Agent Tool 完成参数、结果、注册、执行、Schema 与测试链路"
+  default_prompt: "使用 $agent-tool 新增或审查一个 Agent Tool。"
+
+policy:
+  allow_implicit_invocation: false
