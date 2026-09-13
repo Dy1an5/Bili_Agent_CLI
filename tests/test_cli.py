@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from io import StringIO
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
@@ -20,7 +22,15 @@ from bili_agent_cli.agent.context import (
     ConversationTurn,
 )
 from bili_agent_cli.agent.deepseek.errors import ProviderTimeoutError
-from bili_agent_cli.cli.agent import _read_task
+from bili_agent_cli.agent.memory import (
+    MemoryCandidate,
+    MemoryDurability,
+    MemoryScope,
+    MemorySourceType,
+    MemoryState,
+    MemoryStore,
+)
+from bili_agent_cli.cli.agent import _handle_memory_command, _read_task
 from bili_agent_cli.cli.agent import run as run_agent_chat
 from bili_agent_cli.cli.main import _create_parser
 
@@ -100,6 +110,7 @@ class AgentCliTest(unittest.TestCase):
                 memory=AgentMemoryResult(
                     status=AgentMemoryStatus.SAVED,
                     saved_count=1,
+                    active_saved_count=1,
                 ),
             )
         )
@@ -115,7 +126,7 @@ class AgentCliTest(unittest.TestCase):
         ):
             asyncio.run(run_agent_chat(argparse.Namespace()))
 
-        self.assertIn("记忆> 已保存 1 条长期记忆。", output.getvalue())
+        self.assertIn("记忆> 已更新长期记忆：新增 1 条。", output.getvalue())
 
     def test_chat_reports_memory_extraction_failure(self) -> None:
         session_id = uuid4()
@@ -268,6 +279,72 @@ class AgentCliTest(unittest.TestCase):
         self.assertEqual(model.await_args_list[2].args, ("重试", session_id))
         self.assertIn("模型请求超时", errors.getvalue())
         self.assertIn("重试成功", output.getvalue())
+
+
+class MemoryCliTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.store = MemoryStore(
+            Path(self.temporary_directory.name) / "memory.db"
+        )
+        self.store_patch = patch(
+            "bili_agent_cli.cli.agent.memory_store", new=self.store
+        )
+        self.store_patch.start()
+        self.addCleanup(self.store_patch.stop)
+
+    def create_pending(self):
+        return self.store.remember(
+            MemoryCandidate(
+                key="recommendation.video.links",
+                kind="preference",
+                content="视频推荐直接给链接",
+                topics=[],
+                confidence=0.8,
+                evidence_quote="给网址",
+                durability=MemoryDurability.INFERRED,
+                scope=MemoryScope.INTENT,
+                scope_value="video_recommendation",
+            ),
+            source_type=MemorySourceType.CONVERSATION,
+            source_ref="turn:1",
+        )
+
+    def test_list_confirm_show_edit_delete_restore_and_clear(self) -> None:
+        pending = self.create_pending()
+        output = StringIO()
+
+        with patch("sys.stdout", output):
+            _handle_memory_command("/memory pending")
+            _handle_memory_command(f"/memory confirm {pending.id}")
+            _handle_memory_command(f"/memory show {pending.id}")
+            _handle_memory_command(
+                f"/memory edit {pending.id} 视频推荐必须直接给链接"
+            )
+            _handle_memory_command(f"/memory delete {pending.id}")
+            _handle_memory_command(f"/memory restore {pending.id}")
+            _handle_memory_command("/memory clear --yes")
+
+        rendered = output.getvalue()
+        self.assertIn(str(pending.id), rendered)
+        self.assertIn("已确认", rendered)
+        self.assertIn("证据", rendered)
+        self.assertIn("已修改并激活", rendered)
+        self.assertIn("已软删除", rendered)
+        self.assertIn("已恢复并激活", rendered)
+        self.assertIn("已软删除 1 条", rendered)
+        self.assertEqual(
+            self.store.get_memory(pending.id).state,
+            MemoryState.DELETED,
+        )
+
+    def test_invalid_memory_command_is_reported(self) -> None:
+        errors = StringIO()
+        with patch("sys.stderr", errors):
+            _handle_memory_command("/memory clear")
+
+        self.assertIn("操作失败", errors.getvalue())
 
 
 class ReadTaskTest(unittest.IsolatedAsyncioTestCase):

@@ -3,4 +3,5 @@ __pycache__/
 *.py[cod]
 /privacy
 secret/
-docs/
+docs/*
+!docs/memory.md

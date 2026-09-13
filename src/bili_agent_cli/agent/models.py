@@ -85,6 +85,8 @@ class AgentStep(BaseModel):
 class AgentMemoryStatus(StrEnum):
     NOT_ATTEMPTED = "not_attempted"
     SAVED = "saved"
+    PENDING = "pending"
+    MIXED = "mixed"
     NO_CANDIDATES = "no_candidates"
     FILTERED = "filtered"
     EXTRACTION_FAILED = "extraction_failed"
@@ -94,6 +96,12 @@ class AgentMemoryStatus(StrEnum):
 class AgentMemoryResult(BaseModel):
     status: AgentMemoryStatus = AgentMemoryStatus.NOT_ATTEMPTED
     saved_count: int = Field(default=0, ge=0)
+    extracted_count: int = Field(default=0, ge=0)
+    active_saved_count: int = Field(default=0, ge=0)
+    pending_saved_count: int = Field(default=0, ge=0)
+    promoted_count: int = Field(default=0, ge=0)
+    updated_count: int = Field(default=0, ge=0)
+    filtered_count: int = Field(default=0, ge=0)
     error_code: str | None = None
 
 

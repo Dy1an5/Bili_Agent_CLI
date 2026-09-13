@@ -2,17 +2,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from bili_agent_cli.agent.agent_loop import run_agent, session_store
+from bili_agent_cli.agent.agent_loop import memory_store, run_agent, session_store
 from bili_agent_cli.agent.context import (
     ContextBudgetExceededError,
     SessionNotFoundError,
     SessionStorageError,
 )
 from bili_agent_cli.agent.deepseek.errors import ModelCallError
+from bili_agent_cli.agent.memory import (
+    MemoryNotFoundError,
+    MemoryState,
+    MemoryStorageError,
+)
 from bili_agent_cli.agent.models import AgentMemoryResult, AgentMemoryStatus
 
 
@@ -84,7 +90,10 @@ async def run(arguments: argparse.Namespace) -> None:
     del arguments
 
     session_id = None
-    print("输入 /new 开始新会话，/context 查看上下文，/exit 退出。")
+    print(
+        "输入 /new 开始新会话，/context 查看上下文，"
+        "/memory 管理记忆，/exit 退出。"
+    )
 
     while True:
         try:
@@ -114,6 +123,10 @@ async def run(arguments: argparse.Namespace) -> None:
                 print(f"错误：{_format_chat_error(error)}", file=sys.stderr)
             continue
 
+        if task == "/memory" or task.startswith("/memory "):
+            _handle_memory_command(task)
+            continue
+
         try:
             response = await run_agent(task, session_id)
         except RECOVERABLE_CHAT_ERRORS as error:
@@ -132,11 +145,32 @@ def _print_memory_result(result: AgentMemoryResult) -> None:
         return
 
     if result.status == AgentMemoryStatus.SAVED:
-        print(f"记忆> 已保存 {result.saved_count} 条长期记忆。")
+        parts: list[str] = []
+        if result.active_saved_count:
+            parts.append(f"新增 {result.active_saved_count} 条")
+        if result.promoted_count:
+            parts.append(f"自动确认 {result.promoted_count} 条")
+        if result.updated_count:
+            parts.append(f"更新 {result.updated_count} 条")
+        detail = "，".join(parts) or f"处理 {result.saved_count} 条"
+        print(f"记忆> 已更新长期记忆：{detail}。")
+        return
+
+    if result.status == AgentMemoryStatus.PENDING:
+        print(
+            f"记忆> 新增/更新 {result.pending_saved_count} 条待确认候选；"
+            "使用 /memory pending 查看。"
+        )
+        return
+
+    if result.status == AgentMemoryStatus.MIXED:
+        print(
+            f"记忆> 已激活 {result.saved_count} 条，"
+            f"另有 {result.pending_saved_count} 条待确认候选。"
+        )
         return
 
     if result.status == AgentMemoryStatus.NO_CANDIDATES:
-        print("记忆> 本轮未提取到需要长期保存的信息。")
         return
 
     if result.status == AgentMemoryStatus.FILTERED:
@@ -145,6 +179,100 @@ def _print_memory_result(result: AgentMemoryResult) -> None:
 
     detail = result.error_code or result.status.value
     print(f"记忆> 保存失败（{detail}）。", file=sys.stderr)
+
+
+def _handle_memory_command(command: str) -> None:
+    try:
+        parts = shlex.split(command)
+    except ValueError as error:
+        print(f"记忆> 命令格式错误：{error}", file=sys.stderr)
+        return
+
+    arguments = parts[1:]
+    if not arguments:
+        _print_memory_help()
+        return
+
+    action = arguments[0].lower()
+    try:
+        if action == "pending":
+            _print_memory_list({MemoryState.PENDING})
+        elif action == "list":
+            selection = arguments[1].lower() if len(arguments) > 1 else "active"
+            states = {
+                "active": {MemoryState.ACTIVE},
+                "pending": {MemoryState.PENDING},
+                "all": set(MemoryState),
+            }.get(selection)
+            if states is None or len(arguments) > 2:
+                raise ValueError("用法：/memory list [active|pending|all]")
+            _print_memory_list(states)
+        elif action == "show" and len(arguments) == 2:
+            _print_memory_detail(UUID(arguments[1]))
+        elif action == "confirm" and len(arguments) == 2:
+            item = memory_store.confirm(UUID(arguments[1]))
+            print(f"记忆> 已确认：{item.content}")
+        elif action == "reject" and len(arguments) == 2:
+            item = memory_store.soft_delete(UUID(arguments[1]))
+            print(f"记忆> 已拒绝候选：{item.content}")
+        elif action == "edit" and len(arguments) >= 3:
+            item = memory_store.update_memory(
+                UUID(arguments[1]), " ".join(arguments[2:])
+            )
+            print(f"记忆> 已修改并激活：{item.content}")
+        elif action == "delete" and len(arguments) == 2:
+            item = memory_store.soft_delete(UUID(arguments[1]))
+            print(f"记忆> 已软删除：{item.content}")
+        elif action == "restore" and len(arguments) == 2:
+            item = memory_store.restore(UUID(arguments[1]))
+            print(f"记忆> 已恢复并激活：{item.content}")
+        elif action == "clear" and arguments[1:] == ["--yes"]:
+            count = memory_store.clear_live()
+            print(f"记忆> 已软删除 {count} 条 active/pending 记忆。")
+        else:
+            raise ValueError("未知命令或参数数量不正确；输入 /memory 查看帮助")
+    except (MemoryNotFoundError, MemoryStorageError, ValueError) as error:
+        print(f"记忆> 操作失败：{error}", file=sys.stderr)
+
+
+def _print_memory_help() -> None:
+    print(
+        "记忆命令：\n"
+        "  /memory list [active|pending|all]\n"
+        "  /memory pending\n"
+        "  /memory show <id>\n"
+        "  /memory confirm <id>\n"
+        "  /memory reject <id>\n"
+        "  /memory edit <id> <新内容>\n"
+        "  /memory delete <id>\n"
+        "  /memory restore <id>\n"
+        "  /memory clear --yes"
+    )
+
+
+def _print_memory_list(states: set[MemoryState]) -> None:
+    items = memory_store.list_memories(states=states)
+    if not items:
+        print("记忆> 没有匹配的记录。")
+        return
+    for item in items:
+        scope = item.scope.value
+        if item.scope_value:
+            scope += f":{item.scope_value}"
+        print(
+            f"{item.id}  {item.state.value:<10} {item.kind.value:<10} "
+            f"{scope:<28} evidence={item.evidence_count}  {item.content}"
+        )
+
+
+def _print_memory_detail(memory_id: UUID) -> None:
+    item = memory_store.get_memory(memory_id)
+    print(json.dumps(item.model_dump(mode="json"), ensure_ascii=False, indent=2))
+    evidence = memory_store.list_evidence(memory_id)
+    if evidence:
+        print("证据：")
+        for record in evidence:
+            print(f"- {record.source_ref}: {record.user_excerpt}")
 
 
 def _format_chat_error(error: Exception) -> str:

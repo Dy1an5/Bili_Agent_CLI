@@ -114,6 +114,12 @@ class MainTest(unittest.TestCase):
             {
                 "status": "not_attempted",
                 "saved_count": 0,
+                "extracted_count": 0,
+                "active_saved_count": 0,
+                "pending_saved_count": 0,
+                "promoted_count": 0,
+                "updated_count": 0,
+                "filtered_count": 0,
                 "error_code": None,
             },
         )

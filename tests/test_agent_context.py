@@ -14,7 +14,9 @@ from bili_agent_cli.agent.context import (
 )
 from bili_agent_cli.agent.memory.models import (
     MemoryCandidate,
+    MemoryDurability,
     MemoryExtraction,
+    MemoryScope,
     MemorySourceType,
 )
 from bili_agent_cli.agent.memory.store import (
@@ -69,6 +71,10 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
                 content="推荐 F1 时不要提供入门规则视频",
                 topics=["f1"],
                 confidence=1.0,
+                evidence_quote="以后推荐 F1 时不要提供入门规则视频",
+                durability=MemoryDurability.EXPLICIT,
+                scope=MemoryScope.TOPIC,
+                scope_value="f1",
             ),
             source_type=MemorySourceType.USER,
             source_ref=None,
@@ -125,6 +131,10 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
             content="以后回答保持简短",
             topics=["回答风格"],
             confidence=1.0,
+            evidence_quote="以后回答保持简短",
+            durability=MemoryDurability.EXPLICIT,
+            scope=MemoryScope.GLOBAL,
+            scope_value=None,
         )
         self.memory_extraction.return_value = MemoryExtraction(
             candidates=[candidate]
@@ -157,16 +167,7 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
             f"session:{session.id}:turn:{completed_turn.id}",
         )
 
-        extraction_input = json.loads(
-            self.memory_extraction.await_args.args[0]
-        )
-        self.assertEqual(
-            extraction_input["user_content"],
-            "以后回答保持简短",
-        )
-        self.assertEqual(extraction_input["assistant_content"], "已经记住")
-        self.assertEqual(extraction_input["session_id"], str(session.id))
-        self.assertEqual(extraction_input["turn_id"], str(completed_turn.id))
+        self.memory_extraction.assert_awaited_once_with("以后回答保持简短")
 
     async def test_extraction_failure_keeps_completed_answer(self) -> None:
         self.memory_extraction.side_effect = ProviderTimeoutError(
@@ -180,7 +181,7 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
             "bili_agent_cli.agent.agent_loop.create_agent_message",
             new=create_message,
         ):
-            response = await run_agent("这是一个问题")
+            response = await run_agent("以后回答保持简短")
 
         self.assertEqual(response.answer, "回答仍然成功")
         self.assertEqual(
@@ -216,6 +217,37 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.memory.saved_count, 0)
         self.assertIsNone(response.memory.error_code)
+        self.memory_extraction.assert_not_awaited()
+
+    async def test_one_off_preference_candidate_stays_pending(self) -> None:
+        self.memory_extraction.return_value = MemoryExtraction(
+            candidates=[
+                MemoryCandidate(
+                    key="recommendation.video.creator_tier",
+                    kind="preference",
+                    content="视频推荐优先头部科技 UP 主",
+                    topics=["科技"],
+                    confidence=0.8,
+                    evidence_quote="筛选出头部科技UP的视频",
+                    durability=MemoryDurability.EXPLICIT,
+                    scope=MemoryScope.INTENT,
+                    scope_value="video_recommendation",
+                )
+            ]
+        )
+        create_message = AsyncMock(
+            return_value={"role": "assistant", "content": "筛选结果"}
+        )
+
+        with patch(
+            "bili_agent_cli.agent.agent_loop.create_agent_message",
+            new=create_message,
+        ):
+            response = await run_agent("筛选出头部科技UP的视频")
+
+        self.assertEqual(response.memory.status, AgentMemoryStatus.PENDING)
+        self.assertEqual(response.memory.pending_saved_count, 1)
+        self.assertEqual(self.memory_store.list_memories(), [])
 
     async def test_storage_failure_is_reported(self) -> None:
         self.memory_extraction.return_value = MemoryExtraction(
@@ -226,6 +258,10 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
                     content="以后回答保持简短",
                     topics=["回答风格"],
                     confidence=1.0,
+                    evidence_quote="以后回答保持简短",
+                    durability=MemoryDurability.EXPLICIT,
+                    scope=MemoryScope.GLOBAL,
+                    scope_value=None,
                 )
             ]
         )
@@ -240,7 +276,7 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 self.memory_store,
-                "remember",
+                "observe_many",
                 side_effect=MemoryStorageError("database unavailable"),
             ),
         ):

@@ -41,19 +41,29 @@ def extraction_message(arguments: object) -> dict[str, object]:
     }
 
 
+def candidate_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "key": "response.length",
+        "kind": "constraint",
+        "content": "以后回答保持简短",
+        "topics": [],
+        "confidence": 1.0,
+        "evidence_quote": "以后回答保持简短",
+        "durability": "explicit",
+        "scope": "global",
+        "scope_value": None,
+    }
+    payload.update(overrides)
+    return payload
+
+
 class MemoryExtractionParsingTest(unittest.TestCase):
     def test_parses_valid_candidates(self) -> None:
         extraction = parse_memory_extraction_message(
             extraction_message(
                 {
                     "candidates": [
-                        {
-                            "key": "response.length",
-                            "kind": "constraint",
-                            "content": "以后回答保持简短",
-                            "topics": ["回答风格"],
-                            "confidence": 1.0,
-                        }
+                        candidate_payload(topics=["回答风格"])
                     ]
                 }
             )
@@ -90,12 +100,7 @@ class MemoryExtractionParsingTest(unittest.TestCase):
             extraction_message(
                 {
                     "candidates": [
-                        {
-                            "key": "INVALID KEY",
-                            "kind": "constraint",
-                            "content": "内容",
-                            "confidence": 1.0,
-                        }
+                        candidate_payload(key="INVALID KEY")
                     ]
                 }
             ),
@@ -108,36 +113,45 @@ class MemoryExtractionParsingTest(unittest.TestCase):
 
     def test_filters_sensitive_candidates_without_logging_values(self) -> None:
         candidates = [
-            MemoryCandidate(
-                key="response.length",
-                kind="constraint",
-                content="回答保持简短",
-                confidence=1.0,
+            MemoryCandidate.model_validate(candidate_payload()),
+            MemoryCandidate.model_validate(
+                candidate_payload(
+                    key="account.cookie",
+                    kind="fact",
+                    content="保存登录信息",
+                    evidence_quote="保存登录信息",
+                    scope="topic",
+                    scope_value="account",
+                )
             ),
-            MemoryCandidate(
-                key="account.cookie",
-                kind="fact",
-                content="保存登录信息",
-                confidence=1.0,
+            MemoryCandidate.model_validate(
+                candidate_payload(
+                    key="account.note",
+                    kind="fact",
+                    content="SESSDATA 是敏感凭据",
+                    evidence_quote="SESSDATA 是敏感凭据",
+                    scope="topic",
+                    scope_value="account",
+                )
             ),
-            MemoryCandidate(
-                key="account.note",
-                kind="fact",
-                content="SESSDATA 是敏感凭据",
-                confidence=1.0,
+            MemoryCandidate.model_validate(
+                candidate_payload(
+                    key="developer.preference",
+                    kind="preference",
+                    content="用户喜欢隐藏 API Key",
+                    evidence_quote="用户喜欢隐藏 API Key",
+                    confidence=0.8,
+                )
             ),
-            MemoryCandidate(
-                key="developer.preference",
-                kind="preference",
-                content="用户喜欢隐藏 API Key",
-                confidence=0.8,
-            ),
-            MemoryCandidate(
-                key="account.preference",
-                kind="preference",
-                content="用户希望保持登录",
-                topics=["access_token=private-value"],
-                confidence=0.8,
+            MemoryCandidate.model_validate(
+                candidate_payload(
+                    key="account.preference",
+                    kind="preference",
+                    content="用户希望保持登录",
+                    evidence_quote="用户希望保持登录",
+                    topics=["access_token=private-value"],
+                    confidence=0.8,
+                )
             ),
         ]
 
@@ -196,6 +210,13 @@ class MemoryExtractionRequestTest(unittest.TestCase):
             "candidates",
             body["tools"][0]["function"]["parameters"]["properties"],
         )
+        candidate_schema = body["tools"][0]["function"]["parameters"]["$defs"][
+            "MemoryCandidate"
+        ]
+        self.assertIn("evidence_quote", candidate_schema["required"])
+        self.assertIn("durability", candidate_schema["required"])
+        self.assertIn("scope", candidate_schema["required"])
+        self.assertIn("scope_value", candidate_schema["required"])
 
 
 if __name__ == "__main__":

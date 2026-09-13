@@ -2,54 +2,61 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from bili_agent_cli.agent.memory.models import (
     MemoryCandidate,
+    MemoryDurability,
+    MemoryObservationAction,
+    MemoryScope,
     MemorySourceType,
     MemoryState,
 )
-from bili_agent_cli.agent.memory.store import (
-    MemoryNotFoundError,
-    MemoryStore,
-)
+from bili_agent_cli.agent.memory.store import MemoryNotFoundError, MemoryStore
 
 
 class MemoryStoreTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
-        self.database_path = (
-            Path(self.temporary_directory.name) / "data" / "memory.db"
-        )
+        self.database_path = Path(self.temporary_directory.name) / "data" / "memory.db"
         self.store = MemoryStore(self.database_path)
 
     @staticmethod
     def candidate(
         *,
-        content: str = "喜欢 F1 技术分析",
-        confidence: float = 0.7,
+        key: str = "recommendation.f1.analysis",
+        content: str = "推荐 F1 时优先选择技术分析",
+        confidence: float = 0.9,
         topics: list[str] | None = None,
+        evidence_quote: str = "以后推荐 F1 时优先选择技术分析",
+        durability: MemoryDurability = MemoryDurability.EXPLICIT,
+        scope: MemoryScope = MemoryScope.TOPIC,
+        scope_value: str | None = "f1",
     ) -> MemoryCandidate:
         return MemoryCandidate(
-            key="interest.f1",
+            key=key,
             kind="preference",
             content=content,
             topics=topics if topics is not None else ["f1"],
             confidence=confidence,
+            evidence_quote=evidence_quote,
+            durability=durability,
+            scope=scope,
+            scope_value=scope_value,
         )
 
-    def remember(self, candidate: MemoryCandidate | None = None):
-        return self.store.remember(
-            candidate or self.candidate(),
+    def observe(self, candidate: MemoryCandidate, source_ref: str = "turn:1"):
+        return self.store.observe_many(
+            [candidate],
             source_type=MemorySourceType.CONVERSATION,
-            source_ref="session:test:turn:1",
-        )
+            source_ref=source_ref,
+        )[0]
 
-    def test_initialize_creates_versioned_private_database(self) -> None:
+    def test_initialize_creates_v2_private_database(self) -> None:
         self.store.initialize()
         self.store.initialize()
 
@@ -57,112 +64,246 @@ class MemoryStoreTest(unittest.TestCase):
         self.assertEqual(self.database_path.stat().st_mode & 0o777, 0o600)
         with sqlite3.connect(self.database_path) as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(version, 1)
+            evidence_table = connection.execute(
+                "SELECT name FROM sqlite_master WHERE name='memory_evidence'"
+            ).fetchone()
+        self.assertEqual(version, 2)
+        self.assertIsNotNone(evidence_table)
 
-    def test_remember_lists_and_gets_memory(self) -> None:
-        remembered = self.remember()
+    def test_v1_migration_discards_untrusted_memories(self) -> None:
+        self.database_path.parent.mkdir(parents=True)
+        with sqlite3.connect(self.database_path) as connection:
+            connection.executescript("""
+                CREATE TABLE memory_items (
+                    id TEXT PRIMARY KEY, key TEXT, kind TEXT, content TEXT,
+                    topics_json TEXT, confidence REAL, source_type TEXT,
+                    source_ref TEXT, state TEXT, created_at TEXT,
+                    updated_at TEXT, last_used_at TEXT
+                );
+                CREATE INDEX idx_memory_active_key ON memory_items(state, key);
+                CREATE INDEX idx_memory_updated ON memory_items(state, updated_at);
+                INSERT INTO memory_items VALUES (
+                    'old', 'bad.memory', 'preference', '旧污染记忆', '[]', 0.9,
+                    'conversation', 'turn:old', 'active', '2026-01-01',
+                    '2026-01-01', NULL
+                );
+                PRAGMA user_version = 1;
+            """)
 
-        self.assertEqual(self.store.get_memory(remembered.id), remembered)
-        self.assertEqual(self.store.list_memories(), [remembered])
-        self.assertEqual(remembered.source_ref, "session:test:turn:1")
-        self.assertEqual(remembered.state, MemoryState.ACTIVE)
+        self.store.initialize()
 
-    def test_equivalent_memory_is_merged(self) -> None:
-        first = self.remember(
-            self.candidate(confidence=0.4, topics=["f1"]),
+        self.assertEqual(self.store.list_memories(include_inactive=True), [])
+        with sqlite3.connect(self.database_path) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+
+    def test_explicit_candidate_is_active_with_evidence(self) -> None:
+        result = self.observe(self.candidate())
+
+        self.assertEqual(result.action, MemoryObservationAction.CREATED_ACTIVE)
+        self.assertEqual(result.item.state, MemoryState.ACTIVE)
+        self.assertEqual(result.item.evidence_count, 1)
+        evidence = self.store.list_evidence(result.item.id)
+        self.assertEqual(len(evidence), 1)
+        self.assertEqual(evidence[0].user_excerpt, result.item.content.replace("推荐", "以后推荐", 1))
+
+    def test_inferred_candidate_requires_two_distinct_turns(self) -> None:
+        candidate = self.candidate(
+            key="recommendation.tech.creator_tier",
+            content="视频推荐优先选择头部科技 UP 主",
+            evidence_quote="筛选出头部科技up的视频",
+            durability=MemoryDurability.INFERRED,
+            scope=MemoryScope.INTENT,
+            scope_value="video_recommendation",
+            topics=["科技"],
         )
-        second = self.remember(
+        first = self.observe(candidate, "turn:1")
+        duplicate = self.observe(candidate, "turn:1")
+        second = self.observe(candidate, "turn:2")
+
+        self.assertEqual(first.item.state, MemoryState.PENDING)
+        self.assertEqual(duplicate.item.evidence_count, 1)
+        self.assertEqual(duplicate.action, MemoryObservationAction.UPDATED_PENDING)
+        self.assertEqual(second.action, MemoryObservationAction.PROMOTED)
+        self.assertEqual(second.item.state, MemoryState.ACTIVE)
+        self.assertEqual(second.item.evidence_count, 2)
+
+    def test_similar_content_with_different_key_is_merged(self) -> None:
+        first = self.observe(self.candidate(), "turn:1")
+        second = self.observe(
             self.candidate(
-                content=" 喜欢  F1技术分析 ",
-                confidence=0.9,
-                topics=["赛事"],
+                key="preference.f1.analysis",
+                content="推荐 F1 时优先选择技术分析内容",
+                evidence_quote="我喜欢 F1 技术分析内容",
             ),
+            "turn:2",
         )
 
-        self.assertEqual(second.id, first.id)
-        self.assertEqual(second.confidence, 0.9)
-        self.assertEqual(second.topics, ["f1", "赛事"])
+        self.assertEqual(second.item.id, first.item.id)
         self.assertEqual(len(self.store.list_memories(include_inactive=True)), 1)
 
-    def test_conflicting_memory_supersedes_previous_item(self) -> None:
-        previous = self.remember()
-        current = self.remember(
-            self.candidate(content="不再关注 F1 技术分析"),
+    def test_model_key_wording_drift_still_promotes_pending_memory(self) -> None:
+        first = self.observe(
+            self.candidate(
+                key="recommendation.preferred_up_creators.head_tech",
+                content=(
+                    "在视频推荐场景中，倾向只保留头部 UP 主的视频，"
+                    "过滤掉非头部 UP 主的内容。"
+                ),
+                evidence_quote="筛选出头部科技UP的视频",
+                durability=MemoryDurability.INFERRED,
+                scope=MemoryScope.INTENT,
+                scope_value="video_recommendation",
+                topics=["科技"],
+            ),
+            "turn:1",
+        )
+        second = self.observe(
+            self.candidate(
+                key="recommendation.preferred_channel_tier",
+                content="推荐视频时偏好只筛选头部UP主的内容。",
+                evidence_quote="帮我筛选头部科技UP主的视频",
+                durability=MemoryDurability.INFERRED,
+                scope=MemoryScope.INTENT,
+                scope_value="video_recommendation",
+                topics=["科技"],
+            ),
+            "turn:2",
         )
 
+        self.assertEqual(second.item.id, first.item.id)
+        self.assertEqual(second.action, MemoryObservationAction.PROMOTED)
+        self.assertEqual(second.item.state, MemoryState.ACTIVE)
+        self.assertEqual(second.item.evidence_count, 2)
+        self.assertEqual(len(self.store.list_memories(include_inactive=True)), 1)
+
+    def test_link_key_wording_drift_still_promotes_pending_memory(self) -> None:
+        first = self.observe(
+            self.candidate(
+                key="response.format.include_url",
+                content="偏好以网址（直接链接）的形式获取视频结果。",
+                evidence_quote="给网址",
+                durability=MemoryDurability.INFERRED,
+                scope=MemoryScope.INTENT,
+                scope_value="video_recommendation",
+                topics=[],
+            ),
+            "turn:1",
+        )
+        second = self.observe(
+            self.candidate(
+                key="recommendation.output_format",
+                content="推荐视频时希望直接给出链接。",
+                evidence_quote="直接给链接",
+                durability=MemoryDurability.INFERRED,
+                scope=MemoryScope.INTENT,
+                scope_value="video_recommendation",
+                topics=[],
+            ),
+            "turn:2",
+        )
+
+        self.assertEqual(second.item.id, first.item.id)
+        self.assertEqual(second.action, MemoryObservationAction.PROMOTED)
+        self.assertEqual(second.item.state, MemoryState.ACTIVE)
+        self.assertEqual(len(self.store.list_memories(include_inactive=True)), 1)
+
+    def test_conflicting_same_slot_supersedes_previous(self) -> None:
+        previous = self.observe(self.candidate(), "turn:1").item
+        current = self.observe(
+            self.candidate(
+                content="推荐 F1 时不要选择技术分析",
+                evidence_quote="以后推荐 F1 时不要选择技术分析",
+            ),
+            "turn:2",
+        ).item
+
         self.assertNotEqual(current.id, previous.id)
-        self.assertEqual(self.store.list_memories(), [current])
-        all_items = self.store.list_memories(include_inactive=True)
-        by_id = {item.id: item for item in all_items}
+        by_id = {
+            item.id: item for item in self.store.list_memories(include_inactive=True)
+        }
         self.assertEqual(by_id[previous.id].state, MemoryState.SUPERSEDED)
         self.assertEqual(by_id[current.id].state, MemoryState.ACTIVE)
 
-    def test_update_marks_memory_as_explicit_user_value(self) -> None:
-        remembered = self.remember()
+    def test_negation_supersedes_even_when_text_is_highly_similar(self) -> None:
+        previous = self.observe(
+            self.candidate(content="推荐 F1 时优先选择官方账号"), "turn:1"
+        ).item
+        current = self.observe(
+            self.candidate(
+                content="推荐 F1 时不要优先选择官方账号",
+                evidence_quote="以后推荐 F1 时不要优先选择官方账号",
+            ),
+            "turn:2",
+        ).item
 
-        updated = self.store.update_memory(
-            remembered.id,
-            "  更喜欢 F1 车队策略分析  ",
-        )
+        self.assertNotEqual(current.id, previous.id)
+        self.assertEqual(self.store.get_memory(previous.id).state, MemoryState.SUPERSEDED)
+        self.assertEqual(current.state, MemoryState.ACTIVE)
 
-        self.assertEqual(updated.content, "更喜欢 F1 车队策略分析")
-        self.assertEqual(updated.confidence, 1.0)
-        self.assertEqual(updated.source_type, MemorySourceType.USER)
-        self.assertGreaterEqual(updated.updated_at, remembered.updated_at)
+    def test_pending_expires_after_thirty_days(self) -> None:
+        pending = self.observe(
+            self.candidate(durability=MemoryDurability.INFERRED), "turn:1"
+        ).item
+        old = datetime.now(timezone.utc) - timedelta(days=31)
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE memory_items SET last_observed_at = ? WHERE id = ?",
+                (old.isoformat(), str(pending.id)),
+            )
 
-        for invalid_content in ("", "   ", "x" * 501):
-            with self.subTest(invalid_content=invalid_content[:10]):
-                with self.assertRaises(ValueError):
-                    self.store.update_memory(remembered.id, invalid_content)
+        self.store.expire_pending()
 
-    def test_soft_delete_hides_memory_from_active_list(self) -> None:
-        remembered = self.remember()
+        self.assertEqual(self.store.get_memory(pending.id).state, MemoryState.EXPIRED)
 
-        deleted = self.store.soft_delete(remembered.id)
+    def test_manual_confirm_edit_delete_and_restore(self) -> None:
+        pending = self.observe(
+            self.candidate(durability=MemoryDurability.INFERRED), "turn:1"
+        ).item
+        confirmed = self.store.confirm(pending.id)
+        edited = self.store.update_memory(confirmed.id, "推荐 F1 时优先官方内容")
+        deleted = self.store.soft_delete(edited.id)
+        restored = self.store.restore(deleted.id)
 
+        self.assertEqual(confirmed.state, MemoryState.ACTIVE)
+        self.assertEqual(edited.content, "推荐 F1 时优先官方内容")
+        self.assertEqual(edited.source_type, MemorySourceType.USER)
         self.assertEqual(deleted.state, MemoryState.DELETED)
-        self.assertEqual(self.store.list_memories(), [])
-        self.assertEqual(
-            self.store.get_memory(remembered.id).state,
-            MemoryState.DELETED,
-        )
-        with self.assertRaises(MemoryNotFoundError):
-            self.store.update_memory(remembered.id, "不能修改已删除记录")
+        self.assertEqual(restored.state, MemoryState.ACTIVE)
+        self.assertEqual(restored.confidence, 1.0)
 
     def test_missing_memory_operations_raise_not_found(self) -> None:
-        missing_id = uuid4()
+        missing = uuid4()
+        for operation in (
+            lambda: self.store.get_memory(missing),
+            lambda: self.store.confirm(missing),
+            lambda: self.store.update_memory(missing, "新内容"),
+            lambda: self.store.soft_delete(missing),
+            lambda: self.store.restore(missing),
+        ):
+            with self.subTest(operation=operation):
+                with self.assertRaises(MemoryNotFoundError):
+                    operation()
 
-        with self.assertRaises(MemoryNotFoundError):
-            self.store.get_memory(missing_id)
-        with self.assertRaises(MemoryNotFoundError):
-            self.store.update_memory(missing_id, "新内容")
-        with self.assertRaises(MemoryNotFoundError):
-            self.store.soft_delete(missing_id)
-
-    def test_mark_used_updates_only_active_memories(self) -> None:
-        active = self.remember()
-        deleted = self.store.remember(
-            MemoryCandidate(
-                key="response.length",
-                kind="constraint",
-                content="回答保持简短",
-                confidence=1.0,
+    def test_mark_injected_updates_only_active_memories(self) -> None:
+        active = self.observe(self.candidate(), "turn:1").item
+        pending = self.observe(
+            self.candidate(
+                key="recommendation.tech.creator_tier",
+                content="视频推荐优先选择头部科技 UP 主",
+                evidence_quote="筛选头部科技 UP 主",
+                durability=MemoryDurability.INFERRED,
+                scope=MemoryScope.INTENT,
+                scope_value="video_recommendation",
             ),
-            source_type=MemorySourceType.USER,
-            source_ref=None,
-        )
-        self.store.soft_delete(deleted.id)
-        used_at = datetime(2026, 9, 13, 1, 2, 3, tzinfo=timezone.utc)
+            "turn:2",
+        ).item
+        injected_at = datetime(2026, 9, 13, 1, 2, 3, tzinfo=timezone.utc)
 
-        updated_count = self.store.mark_used(
-            [active.id, deleted.id],
-            used_at,
-        )
+        count = self.store.mark_injected([active.id, pending.id], injected_at)
 
-        self.assertEqual(updated_count, 1)
-        self.assertEqual(self.store.get_memory(active.id).last_used_at, used_at)
-        self.assertIsNone(self.store.get_memory(deleted.id).last_used_at)
-        self.assertEqual(self.store.mark_used([], used_at), 0)
+        self.assertEqual(count, 1)
+        self.assertEqual(self.store.get_memory(active.id).last_injected_at, injected_at)
+        self.assertIsNone(self.store.get_memory(pending.id).last_injected_at)
 
 
 if __name__ == "__main__":

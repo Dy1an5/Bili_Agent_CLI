@@ -42,7 +42,29 @@ uv run bili-agent-cli get /x/v3/fav/folder/created/list-all \
 uv run bili-agent-cli agent
 ```
 
-对话过程中输入 `/new` 开始新会话，输入 `/context` 查看当前 Session 保存的摘要、轮次、工具证据、实际引用来源和未完成轮次，输入 `/exit` 退出。会话会持久化到 `privacy/conversations/`；Agent HTTP 接口在程序重启后仍可传入原 `session_id` 载入。CLI 暂未提供 `/resume` 选择入口。
+对话过程中输入 `/new` 开始新会话，输入 `/context` 查看当前 Session 保存的摘要、轮次、工具证据、实际引用来源和未完成轮次，输入 `/memory` 管理长期记忆，输入 `/exit` 退出。会话会持久化到 `privacy/conversations/`；Agent HTTP 接口在程序重启后仍可传入原 `session_id` 载入。CLI 暂未提供 `/resume` 选择入口。
+
+## 长期记忆
+
+长期记忆保存在 `privacy/memory.db`。用户明确表达的长期偏好会直接生效；从一次任务中推断出的偏好只进入 `pending`，同一偏好由两个不同轮次支持后才会自动激活。只有与当前主题或任务意图匹配的 active 记忆会加入模型上下文，pending 不参与回答。
+
+完整的架构、数据表、调用链路、状态机、写入去重评分、读取召回评分、安全边界和维护说明见 [`docs/memory.md`](docs/memory.md)。
+
+交互式 Agent 支持以下命令：
+
+```text
+/memory list [active|pending|all]
+/memory pending
+/memory show <id>
+/memory confirm <id>
+/memory reject <id>
+/memory edit <id> <新内容>
+/memory delete <id>
+/memory restore <id>
+/memory clear --yes
+```
+
+`delete`、`reject` 和 `clear` 都是可恢复的软删除；`restore` 会把指定记录恢复为用户明确确认的 active 记忆。候选证据只来自用户原文，不使用助手回复或工具结果。凭据、API key、Cookie、手机号、证件号、邮箱和精确地址不会被自动保存。
 
 交互输入由 `prompt_toolkit` 接管：汉字等宽字符的退格按显示宽度重绘，不会留下半个字，另外支持 ↑/↓ 调出本次会话的历史和多行粘贴。标准输入或标准输出不是终端时（管道、重定向、测试）自动退回内置 `input`，行为与以前一致。需要注意：uv 管理的 CPython 里 `readline` 是内建 libedit 模块（`sys.builtin_module_names` 里有它，且没有 `__file__`），它按字符数而不是显示宽度计算重绘位置，汉字退格仍会残留，所以不要试图用 `import readline` 修这个问题；后续新增交互提示请统一走 `cli/agent.py` 的 `_read_task`，不要再直接调用 `input`。
 

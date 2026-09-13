@@ -33,11 +33,12 @@ from .context.manager import (
 )
 from .context.models import AgentEvidenceBatch, ConversationTurn
 from .context.store import FileSessionStore
-from .memory.models import MemorySourceType
 from .memory.service import (
-    filter_memory_candidates,
+    MemoryProcessingResult,
+    process_memory_candidates,
     render_memory_context,
     retrieve_memories,
+    should_extract_memory,
 )
 from .memory.store import MemoryStorageError, MemoryStore
 from .executor import execute_tool
@@ -162,7 +163,7 @@ async def run_agent(
             retrieved_memories = retrieve_memories(
                 memory_store,
                 task,
-                limit=12,
+                limit=8,
             )
         except MemoryStorageError as error:
             logger.warning(
@@ -224,25 +225,32 @@ async def run_agent(
             await session_store.save(session)
 
             memory_result = AgentMemoryResult()
-            try:
-                extraction_input = json.dumps(
-                    {
-                        "user_content": pending_turn.user_content,
-                        "assistant_content": pending_turn.assistant_content,
-                        "session_id": str(session.id),
-                        "turn_id": str(pending_turn.id),
-                    },
-                    ensure_ascii=False,
+            if not should_extract_memory(pending_turn.user_content):
+                memory_result = AgentMemoryResult(
+                    status=AgentMemoryStatus.NO_CANDIDATES,
                 )
-                extraction = await create_memory_extraction(extraction_input)
+                return AgentRunResponse(
+                    answer=answer,
+                    session_id=session.id,
+                    context_compacted=context_compacted,
+                    sources=final_sources,
+                    trace=trace,
+                    memory=memory_result,
+                )
+
+            try:
+                extraction = await create_memory_extraction(
+                    pending_turn.user_content
+                )
             except ModelCallError as error:
+                error_code = _memory_error_code(error)
                 logger.warning(
                     "memory extraction failed: %s",
-                    error.__class__.__name__,
+                    error_code,
                 )
                 memory_result = AgentMemoryResult(
                     status=AgentMemoryStatus.EXTRACTION_FAILED,
-                    error_code=error.__class__.__name__,
+                    error_code=error_code,
                 )
             except ValidationError as error:
                 logger.warning(
@@ -254,42 +262,26 @@ async def run_agent(
                     error_code=error.__class__.__name__,
                 )
             else:
-                candidates = filter_memory_candidates(extraction.candidates)
-                if not candidates:
-                    status = (
-                        AgentMemoryStatus.FILTERED
-                        if extraction.candidates
-                        else AgentMemoryStatus.NO_CANDIDATES
+                try:
+                    processing = process_memory_candidates(
+                        memory_store,
+                        extraction.candidates,
+                        user_content=pending_turn.user_content,
+                        source_ref=(
+                            f"session:{session.id}:turn:{pending_turn.id}"
+                        ),
                     )
-                    memory_result = AgentMemoryResult(status=status)
+                except MemoryStorageError as error:
+                    logger.warning(
+                        "memory storage failed: %s",
+                        error.__class__.__name__,
+                    )
+                    memory_result = AgentMemoryResult(
+                        status=AgentMemoryStatus.STORAGE_FAILED,
+                        error_code=error.__class__.__name__,
+                    )
                 else:
-                    saved_count = 0
-                    try:
-                        for candidate in candidates:
-                            memory_store.remember(
-                                candidate,
-                                source_type=MemorySourceType.CONVERSATION,
-                                source_ref=(
-                                    f"session:{session.id}:turn:{pending_turn.id}"
-                                ),
-                            )
-                            saved_count += 1
-                    except MemoryStorageError as error:
-                        logger.warning(
-                            "memory storage failed after %d saves: %s",
-                            saved_count,
-                            error.__class__.__name__,
-                        )
-                        memory_result = AgentMemoryResult(
-                            status=AgentMemoryStatus.STORAGE_FAILED,
-                            saved_count=saved_count,
-                            error_code=error.__class__.__name__,
-                        )
-                    else:
-                        memory_result = AgentMemoryResult(
-                            status=AgentMemoryStatus.SAVED,
-                            saved_count=saved_count,
-                        )
+                    memory_result = _memory_result_from_processing(processing)
 
             return AgentRunResponse(
                 answer=answer,
@@ -521,3 +513,36 @@ async def run_agent(
             sources=[],
             trace=trace,
         )
+
+
+def _memory_result_from_processing(
+    processing: MemoryProcessingResult,
+) -> AgentMemoryResult:
+    active_count = processing.active_saved_count + processing.promoted_count
+    if active_count and processing.pending_saved_count:
+        status = AgentMemoryStatus.MIXED
+    elif active_count or processing.updated_count:
+        status = AgentMemoryStatus.SAVED
+    elif processing.pending_saved_count:
+        status = AgentMemoryStatus.PENDING
+    elif processing.filtered_count:
+        status = AgentMemoryStatus.FILTERED
+    else:
+        status = AgentMemoryStatus.NO_CANDIDATES
+
+    return AgentMemoryResult(
+        status=status,
+        saved_count=active_count,
+        extracted_count=processing.extracted_count,
+        active_saved_count=processing.active_saved_count,
+        pending_saved_count=processing.pending_saved_count,
+        promoted_count=processing.promoted_count,
+        updated_count=processing.updated_count,
+        filtered_count=processing.filtered_count,
+    )
+
+
+def _memory_error_code(error: Exception) -> str:
+    name = error.__class__.__name__
+    status_code = getattr(error, "status_code", None)
+    return f"{name}:{status_code}" if isinstance(status_code, int) else name
