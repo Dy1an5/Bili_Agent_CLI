@@ -388,6 +388,7 @@ def merge_sources(sources: list[AgentSource]) -> list[AgentSource]:
 
 PAGED_TOOL_NAMES = {
     "get_following_feed",
+    "get_following_users",
     "get_favorite_folder_videos",
     "get_watch_later",
     "get_watch_history",

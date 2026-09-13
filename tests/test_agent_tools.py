@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 
 from bili_agent_cli.agent.executor import execute_tool
 from bili_agent_cli.agent.models import AgentSource
 from bili_agent_cli.agent.registry import TOOL_REGISTRY, build_tool_schemas
+from bili_agent_cli.agent.result_models import LlmFollowingUsersResult
+from bili_agent_cli.bilibili.following_users import FollowingUsersError
 from bili_agent_cli.schemas.favorites import (
     FavoriteFolder,
     FavoriteFolderListResponse,
@@ -20,6 +23,11 @@ from bili_agent_cli.schemas.history import (
     HistoryVideo,
     HistoryVideoAuthor,
 )
+from bili_agent_cli.schemas.following_users import (
+    FollowingOfficialVerification,
+    FollowingUser,
+    FollowingUsersResponse,
+)
 
 
 class AgentToolsTest(unittest.TestCase):
@@ -28,6 +36,7 @@ class AgentToolsTest(unittest.TestCase):
             set(TOOL_REGISTRY),
             {
                 "get_following_feed",
+                "get_following_users",
                 "get_favorite_folders",
                 "get_favorite_folder_videos",
                 "get_watch_later",
@@ -48,6 +57,21 @@ class AgentToolsTest(unittest.TestCase):
         history_parameters = schemas["get_watch_history"]["parameters"]
         self.assertIn("max", history_parameters["properties"])
         self.assertIn("view_at", history_parameters["properties"])
+        following_parameters = schemas["get_following_users"]["parameters"]
+        self.assertFalse(following_parameters["additionalProperties"])
+        self.assertEqual(following_parameters["properties"]["page"]["default"], 1)
+        self.assertEqual(
+            following_parameters["properties"]["page_size"]["maximum"],
+            50,
+        )
+        self.assertEqual(
+            following_parameters["$defs"]["FollowingUsersSort"]["enum"],
+            ["recent", "frequent"],
+        )
+        self.assertIn(
+            "最近关注",
+            following_parameters["properties"]["sort"]["description"],
+        )
         self.assertIn("submit_agent_answer", schemas)
         self.assertIn(
             "source_ids",
@@ -187,6 +211,132 @@ class AgentToolsTest(unittest.TestCase):
         self.assertEqual(video["viewed_at"], "2025-09-10 10:46 (UTC+8)")
         self.assertNotIn("cover_url", video)
         self.assertNotIn("avatar_url", video["author"])
+
+    @staticmethod
+    def _following_users_response() -> FollowingUsersResponse:
+        return FollowingUsersResponse(
+            users=[
+                FollowingUser(
+                    mid="456",
+                    name="测试UP主",
+                    avatar_url="https://i0.hdslb.com/avatar.jpg",
+                    signature="测试签名",
+                    followed_at=1_757_472_400,
+                    is_mutual=True,
+                    is_special=False,
+                    official_verification=FollowingOfficialVerification(
+                        type=0,
+                        description="官方账号",
+                    ),
+                )
+            ],
+            total=21,
+            page=1,
+            page_size=20,
+            has_more=True,
+        )
+
+    def test_executes_following_users_tool_for_current_account(self) -> None:
+        response = self._following_users_response()
+
+        with (
+            patch(
+                "bili_agent_cli.agent.tools.bili.get_following_users.load_profile",
+                return_value={
+                    "SESSDATA": "test-value",
+                    "bili_jct": "csrf-value",
+                    "DedeUserID": "123",
+                },
+            ),
+            patch(
+                "bili_agent_cli.agent.tools.bili.get_following_users.fetch_following_users",
+                new=AsyncMock(return_value=response),
+            ) as fetch_mock,
+        ):
+            result = asyncio.run(
+                execute_tool(
+                    "get_following_users",
+                    {"page": 1, "page_size": 20, "sort": "recent"},
+                )
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(fetch_mock.await_args.args[0], "123")
+        self.assertEqual(fetch_mock.await_args.args[1].sort.value, "recent")
+        self.assertEqual(fetch_mock.await_args.args[2], "SESSDATA=test-value")
+        user = result["data"]["users"][0]
+        self.assertEqual(user["mid"], "456")
+        self.assertEqual(user["followed_at"], "2025-09-10 10:46 (UTC+8)")
+        self.assertNotIn("avatar_url", user)
+        self.assertEqual(result["data"]["page"], 1)
+        self.assertTrue(result["data"]["has_more"])
+
+    def test_rejects_invalid_following_users_arguments(self) -> None:
+        result = asyncio.run(
+            execute_tool(
+                "get_following_users",
+                {"page": 0, "unknown": True},
+            )
+        )
+
+        self.assertEqual(
+            result,
+            {"ok": False, "error": "INVALID_TOOL_ARGUMENTS"},
+        )
+
+    def test_maps_following_users_domain_error_to_stable_code(self) -> None:
+        with patch(
+            "bili_agent_cli.agent.registry.get_following_users_tool",
+            new=AsyncMock(side_effect=FollowingUsersError("sensitive detail")),
+        ):
+            result = asyncio.run(execute_tool("get_following_users", {}))
+
+        self.assertEqual(
+            result,
+            {"ok": False, "error": "FOLLOWING_USERS_FETCH_ERROR"},
+        )
+        self.assertNotIn("sensitive", str(result))
+
+    def test_rejects_invalid_following_users_result(self) -> None:
+        definition = TOOL_REGISTRY["get_following_users"]
+        invalid_definition = replace(
+            definition,
+            executor=AsyncMock(return_value={"users": []}),
+        )
+
+        with patch.dict(
+            TOOL_REGISTRY,
+            {"get_following_users": invalid_definition},
+        ):
+            result = asyncio.run(execute_tool("get_following_users", {}))
+
+        self.assertEqual(
+            result,
+            {"ok": False, "error": "INVALID_TOOL_RESULT"},
+        )
+
+    def test_rejects_invalid_following_users_projection(self) -> None:
+        definition = TOOL_REGISTRY["get_following_users"]
+
+        def invalid_projector(result):
+            return LlmFollowingUsersResult.model_validate({})
+
+        invalid_definition = replace(
+            definition,
+            executor=AsyncMock(return_value=self._following_users_response()),
+            result_projector=invalid_projector,
+        )
+
+        with patch.dict(
+            TOOL_REGISTRY,
+            {"get_following_users": invalid_definition},
+        ):
+            result = asyncio.run(execute_tool("get_following_users", {}))
+
+        self.assertEqual(
+            result,
+            {"ok": False, "error": "INVALID_LLM_TOOL_RESULT"},
+        )
 
 
 if __name__ == "__main__":

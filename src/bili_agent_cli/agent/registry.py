@@ -10,9 +10,13 @@ from bili_agent_cli.schemas.favorites import (
     FavoriteFolderVideosResponse,
     FavoriteFoldersQuery,
 )
-from bili_agent_cli.schemas.following import (
+from bili_agent_cli.schemas.following_feed import (
     FollowingFeedQuery,
     FollowingFeedResponse,
+)
+from bili_agent_cli.schemas.following_users import (
+    FollowingUsersQuery,
+    FollowingUsersResponse,
 )
 from bili_agent_cli.schemas.history import HistoryQuery, HistoryResponse
 from bili_agent_cli.schemas.search import SearchVideoQuery, SearchVideoResponse
@@ -22,6 +26,7 @@ from .result_models import (
     project_favorite_folder_videos,
     project_favorite_folders,
     project_following_feed,
+    project_following_users,
     project_watch_history,
     project_search_videos,
     project_watch_later,
@@ -30,7 +35,8 @@ from .tools.bili.get_favorites import (
     get_favorite_folder_videos_tool,
     get_favorite_folders_tool,
 )
-from .tools.bili.get_following import get_following_feed_tool
+from .tools.bili.get_following_feed import get_following_feed_tool
+from .tools.bili.get_following_users import get_following_users_tool
 from .tools.bili.get_history import get_watch_history_tool
 from .tools.bili.get_watch_later import get_watch_later_tool
 from .tools.bili.search_videos import search_videos_tool
@@ -55,6 +61,13 @@ async def _run_get_following_feed_tool(args: BaseModel) -> BaseModel:
         raise TypeError("get_following_feed_tool 收到了错误的参数模型")
 
     return await get_following_feed_tool(args)
+
+
+async def _run_get_following_users_tool(args: BaseModel) -> BaseModel:
+    if not isinstance(args, FollowingUsersQuery):
+        raise TypeError("get_following_users_tool 收到了错误的参数模型")
+
+    return await get_following_users_tool(args)
 
 
 async def _run_get_favorite_folders_tool(args: BaseModel) -> BaseModel:
@@ -103,6 +116,19 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         result_model = FollowingFeedResponse,
         executor = _run_get_following_feed_tool,
         result_projector=project_following_feed,
+    ),
+    "get_following_users": ToolDefinition(
+        name="get_following_users",
+        description=(
+            "分页获取当前已登录 Bilibili 账号关注的用户列表。"
+            "无需前置工具，目标账号 MID 来自当前登录资料；"
+            "使用 page 和 page_size 翻页，sort 可选择最近关注或最常访问。"
+            "返回的 mid 可用于识别具体关注用户。"
+        ),
+        args_model=FollowingUsersQuery,
+        result_model=FollowingUsersResponse,
+        executor=_run_get_following_users_tool,
+        result_projector=project_following_users,
     ),
     "get_favorite_folders": ToolDefinition(
         name="get_favorite_folders",

@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import httpx
 
+from bili_agent_cli.bilibili.following_users import FollowingUsersError
 from bili_agent_cli.bilibili.history import HistoryError
 from bili_agent_cli.main import app
 from bili_agent_cli.agent.context import (
@@ -26,7 +27,12 @@ from bili_agent_cli.schemas.history import (
     HistoryVideo,
     HistoryVideoAuthor,
 )
-from bili_agent_cli.schemas.following import FollowingFeedResponse
+from bili_agent_cli.schemas.following_feed import (
+    FollowingFeedResponse,
+)
+from bili_agent_cli.schemas.following_users import (
+    FollowingUsersResponse,
+)
 from bili_agent_cli.schemas.watch_later import (
     WatchLaterResponse,
     WatchLaterVideo,
@@ -34,7 +40,10 @@ from bili_agent_cli.schemas.watch_later import (
 )
 from bili_agent_cli.profile import ProfileError
 from bili_agent_cli.schemas.search import SearchVideoResponse
-from tests.test_following import EXPECTED_FOLLOWING_RESPONSE
+from tests.test_following import (
+    EXPECTED_FOLLOWING_RESPONSE,
+    EXPECTED_FOLLOWING_USERS_RESPONSE,
+)
 from tests.test_search_schemas import EXPECTED_SEARCH_RESPONSE
 
 
@@ -205,7 +214,7 @@ class MainTest(unittest.TestCase):
 
         with (
             patch(
-                "bili_agent_cli.routes.following.load_profile",
+                "bili_agent_cli.routes.following_feed.load_profile",
                 return_value={
                     "SESSDATA": "test-value",
                     "bili_jct": "csrf-value",
@@ -213,7 +222,7 @@ class MainTest(unittest.TestCase):
                 },
             ),
             patch(
-                "bili_agent_cli.routes.following.fetch_following_feed",
+                "bili_agent_cli.routes.following_feed.fetch_following_feed",
                 new=AsyncMock(return_value=parsed_response),
             ) as fetch_mock,
         ):
@@ -228,6 +237,85 @@ class MainTest(unittest.TestCase):
         self.assertEqual(response.json(), EXPECTED_FOLLOWING_RESPONSE)
         query = fetch_mock.await_args.args[0]
         self.assertEqual(query.offset, "current-offset")
+
+    def test_following_users_route_returns_response_model(self) -> None:
+        parsed_response = FollowingUsersResponse.model_validate(
+            EXPECTED_FOLLOWING_USERS_RESPONSE
+        )
+
+        with (
+            patch(
+                "bili_agent_cli.routes.following_users.load_profile",
+                return_value={
+                    "SESSDATA": "test-value",
+                    "bili_jct": "csrf-value",
+                    "DedeUserID": "123",
+                },
+            ),
+            patch(
+                "bili_agent_cli.routes.following_users.fetch_following_users",
+                new=AsyncMock(return_value=parsed_response),
+            ) as fetch_mock,
+        ):
+            response = asyncio.run(
+                self._request(
+                    "/api/following/users",
+                    {"page": "2", "page_size": "10", "sort": "frequent"},
+                )
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), EXPECTED_FOLLOWING_USERS_RESPONSE)
+        self.assertEqual(fetch_mock.await_args.args[0], "123")
+        query = fetch_mock.await_args.args[1]
+        self.assertEqual(query.page, 2)
+        self.assertEqual(query.page_size, 10)
+        self.assertEqual(query.sort.value, "frequent")
+        self.assertEqual(fetch_mock.await_args.args[2], "SESSDATA=test-value")
+
+    def test_following_users_route_validates_query(self) -> None:
+        response = asyncio.run(
+            self._request(
+                "/api/following/users",
+                {"page_size": "51"},
+            )
+        )
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_following_users_route_maps_profile_and_upstream_errors(self) -> None:
+        with patch(
+            "bili_agent_cli.routes.following_users.load_profile",
+            side_effect=ProfileError("未登录"),
+        ):
+            unauthorized = asyncio.run(
+                self._request("/api/following/users")
+            )
+
+        with (
+            patch(
+                "bili_agent_cli.routes.following_users.load_profile",
+                return_value={
+                    "SESSDATA": "test-value",
+                    "bili_jct": "csrf-value",
+                    "DedeUserID": "123",
+                },
+            ),
+            patch(
+                "bili_agent_cli.routes.following_users.fetch_following_users",
+                new=AsyncMock(
+                    side_effect=FollowingUsersError("上游错误")
+                ),
+            ),
+        ):
+            bad_gateway = asyncio.run(
+                self._request("/api/following/users")
+            )
+
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(unauthorized.json(), {"detail": "未登录"})
+        self.assertEqual(bad_gateway.status_code, 502)
+        self.assertEqual(bad_gateway.json(), {"detail": "上游错误"})
 
     def test_favorite_folders_route_returns_response_model(self) -> None:
         parsed_response = FavoriteFolderListResponse(

@@ -133,6 +133,17 @@ curl --get http://127.0.0.1:8000/api/following/feed \
 
 FastAPI 会把 B站的异构动态响应转换为最小视频列表模型，只返回视频动态。输出包含动态 ID、UP主、视频和下一页信息。动态接口没有提供 `cid` 时返回 `null`，进入视频详情后再通过 `bvid` 补齐。
 
+分页获取当前账号关注的 UP 主：
+
+```bash
+curl --get http://127.0.0.1:8000/api/following/users \
+    --data-urlencode 'page=1' \
+    --data-urlencode 'page_size=20' \
+    --data-urlencode 'sort=recent'
+```
+
+`sort` 可取 `recent`（最近关注）或 `frequent`（最常访问）。响应包含 UP 主资料、关注时间、互关/特别关注状态、认证信息和分页数据。
+
 ## 获取收藏夹和收藏视频
 
 获取当前账号创建的收藏夹：

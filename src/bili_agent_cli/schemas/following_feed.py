@@ -8,7 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field
 class FollowingFeedQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    offset: str | None = Field(default=None, min_length=1)
+    offset: str | None = Field(
+        default=None,
+        min_length=1,
+        description="上一页返回的 next_offset；第一页不传。",
+    )
 
 
 class FollowingAuthor(BaseModel):
@@ -51,7 +55,3 @@ class FollowingFeedResponse(BaseModel):
     items: list[FollowingVideoItem]
     has_more: bool
     next_offset: str | None
-
-
-class FollowingNotFoundError(Exception):
-    pass

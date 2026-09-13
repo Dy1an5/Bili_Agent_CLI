@@ -1,6 +1,7 @@
 from pydantic import ValidationError
 
-from bili_agent_cli.schemas.following import FollowingNotFoundError
+from bili_agent_cli.bilibili.following_users import FollowingUsersError
+from bili_agent_cli.profile import ProfileError
 from .registry import TOOL_REGISTRY
 
 async def execute_tool(
@@ -27,10 +28,16 @@ async def execute_tool(
     try:
         raw_result = await definition.executor(args)
 
-    except FollowingNotFoundError:
+    except ProfileError:
         return {
             "ok": False,
-            "error": "FOLLOWING NOT FOUND",
+            "error": "AUTH_PROFILE_ERROR",
+        }
+
+    except FollowingUsersError:
+        return {
+            "ok": False,
+            "error": "FOLLOWING_USERS_FETCH_ERROR",
         }
 
     except Exception:

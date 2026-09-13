@@ -6,7 +6,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from bili_agent_cli.bilibili.auth import BILIBILI_REFERER, BILIBILI_USER_AGENT
-from bili_agent_cli.schemas.following import (
+from bili_agent_cli.schemas.following_feed import (
     FollowingAuthor,
     FollowingDynamicStats,
     FollowingFeedQuery,

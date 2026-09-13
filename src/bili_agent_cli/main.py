@@ -8,7 +8,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from bili_agent_cli.routes.agent import router as agent_router
-from bili_agent_cli.routes.following import router as following_router
+from bili_agent_cli.routes.following_feed import router as following_feed_router
+from bili_agent_cli.routes.following_users import router as following_users_router
 from bili_agent_cli.routes.favorites import router as favorites_router
 from bili_agent_cli.routes.history import router as history_router
 from bili_agent_cli.routes.watch_later import router as watch_later_router
@@ -32,7 +33,8 @@ app = FastAPI(
     title="Bili Agent CLI API",
     default_response_class=PrettyJSONResponse,
 )
-app.include_router(following_router)
+app.include_router(following_feed_router)
+app.include_router(following_users_router)
 app.include_router(favorites_router)
 app.include_router(history_router)
 app.include_router(watch_later_router)

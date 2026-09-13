@@ -8,12 +8,19 @@ from pydantic import ValidationError
 from bili_agent_cli.agent.result_models import (
     LlmFavoriteFolderVideosResult,
     LlmFollowingFeedResult,
+    LlmFollowingUsersResult,
     LlmSearchVideoResult,
     LlmVideoAuthor,
     LlmWatchLaterResult,
     format_beijing_time,
+    project_following_users,
 )
 from bili_agent_cli.schemas.common import VideoStats
+from bili_agent_cli.schemas.following_users import (
+    FollowingOfficialVerification,
+    FollowingUser,
+    FollowingUsersResponse,
+)
 
 
 class FormatBeijingTimeTest(unittest.TestCase):
@@ -87,6 +94,53 @@ class FollowingFeedProjectionTest(unittest.TestCase):
         self.assertEqual(item.published_at.year, 2026)
         self.assertIsNotNone(item.published_at.tzinfo)
         self.assertEqual(item.published_at.utcoffset().total_seconds(), 0)
+
+
+class FollowingUsersProjectionTest(unittest.TestCase):
+    def test_keeps_answer_fields_and_trims_avatar(self) -> None:
+        full_result = FollowingUsersResponse(
+            users=[
+                FollowingUser(
+                    mid="456",
+                    name="测试UP主",
+                    avatar_url="https://i0.hdslb.com/avatar.jpg",
+                    signature="测试签名",
+                    followed_at=1_757_472_400,
+                    is_mutual=True,
+                    is_special=False,
+                    official_verification=FollowingOfficialVerification(
+                        type=0,
+                        description="官方账号",
+                    ),
+                )
+            ],
+            total=21,
+            page=1,
+            page_size=20,
+            has_more=True,
+        )
+
+        projected = project_following_users(full_result)
+
+        self.assertIsInstance(projected, LlmFollowingUsersResult)
+        full_payload = full_result.model_dump(mode="json")
+        payload = projected.model_dump(mode="json")
+        self.assertIn("avatar_url", full_payload["users"][0])
+        self.assertNotIn("avatar_url", payload["users"][0])
+        self.assertEqual(payload["users"][0]["mid"], "456")
+        self.assertEqual(payload["users"][0]["signature"], "测试签名")
+        self.assertEqual(
+            payload["users"][0]["followed_at"],
+            "2025-09-10 10:46 (UTC+8)",
+        )
+        self.assertEqual(
+            payload["users"][0]["official_verification"],
+            {"type": 0, "description": "官方账号"},
+        )
+        self.assertEqual(payload["total"], 21)
+        self.assertEqual(payload["page"], 1)
+        self.assertEqual(payload["page_size"], 20)
+        self.assertTrue(payload["has_more"])
 
 
 class OptionalTimeProjectionTest(unittest.TestCase):

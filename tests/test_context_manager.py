@@ -270,6 +270,22 @@ class ContextManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(state)
         self.assertEqual(state.next_arguments, {"offset": "next-offset"})
 
+    def test_extracts_following_users_next_page_arguments(self) -> None:
+        state = extract_pagination_state(
+            "get_following_users",
+            {"page": 2, "page_size": 20, "sort": "frequent"},
+            {
+                "ok": True,
+                "data": {"has_more": True, "page": 2, "page_size": 20},
+            },
+        )
+
+        self.assertIsNotNone(state)
+        self.assertEqual(
+            state.next_arguments,
+            {"page": 3, "page_size": 20, "sort": "frequent"},
+        )
+
     def test_extracts_next_page_arguments(self) -> None:
         state = extract_pagination_state(
             "search_videos",

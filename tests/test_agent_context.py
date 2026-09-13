@@ -315,7 +315,7 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_agent_reports_compaction(self) -> None:
         manager = ContextManager(
             ContextSettings(
-                max_input_units=5_000,
+                max_input_units=7_000,
                 summarize_at_units=100,
                 recent_turns=1,
                 summary_max_tokens=100,
@@ -810,6 +810,59 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
         previous_answer = next_turn_messages[-2]["content"]
         self.assertIn("<pagination_state>", previous_answer)
         self.assertIn("opaque-next-offset", previous_answer)
+
+    async def test_next_turn_receives_following_users_page_state(self) -> None:
+        create_message = AsyncMock(
+            side_effect=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call-users-1",
+                            "function": {
+                                "name": "get_following_users",
+                                "arguments": (
+                                    '{"page":1,"page_size":20,'
+                                    '"sort":"recent"}'
+                                ),
+                            },
+                        }
+                    ],
+                },
+                {"role": "assistant", "content": "还有关注用户，要继续吗？"},
+                {"role": "assistant", "content": "已读取下一页关注用户"},
+            ]
+        )
+        tool_result = {
+            "ok": True,
+            "data": {
+                "users": [],
+                "total": 21,
+                "page": 1,
+                "page_size": 20,
+                "has_more": True,
+            },
+        }
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.execute_tool",
+                new=AsyncMock(return_value=tool_result),
+            ),
+        ):
+            first = await run_agent("查看我关注的用户")
+            await run_agent("继续", first.session_id)
+
+        next_turn_messages = create_message.await_args_list[2].kwargs["messages"]
+        previous_answer = next_turn_messages[-2]["content"]
+        self.assertIn("<pagination_state>", previous_answer)
+        self.assertIn('"page":2', previous_answer)
+        self.assertIn('"sort":"recent"', previous_answer)
 
     async def test_interrupted_turn_keeps_tool_evidence_for_retry(self) -> None:
         session = await self.session_store.create()

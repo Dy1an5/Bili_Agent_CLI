@@ -1,13 +1,9 @@
-from bili_agent_cli.bilibili.following import (
-    FollowingFeedError,
-    fetch_following_feed,
-)
+from bili_agent_cli.bilibili.following_feed import fetch_following_feed
 from bili_agent_cli.profile import (
-    ProfileError,
     get_sessdata_cookie_header,
     load_profile,
 )
-from bili_agent_cli.schemas.following import (
+from bili_agent_cli.schemas.following_feed import (
     FollowingFeedQuery,
     FollowingFeedResponse,
 )

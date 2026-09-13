@@ -7,10 +7,11 @@ from pydantic import BaseModel, PlainSerializer, computed_field
 
 from bili_agent_cli.agent.models import build_video_source_id
 from bili_agent_cli.schemas.common import VideoStats
-from bili_agent_cli.schemas.following import (
+from bili_agent_cli.schemas.following_feed import (
     FollowingDynamicStats,
     FollowingVideoStats,
 )
+from bili_agent_cli.schemas.following_users import FollowingOfficialVerification
 from bili_agent_cli.schemas.history import HistoryResponse
 
 
@@ -156,6 +157,24 @@ class LlmFollowingFeedResult(BaseModel):
     next_offset: str | None
 
 
+class LlmFollowingUser(BaseModel):
+    mid: str
+    name: str
+    signature: str | None
+    followed_at: BeijingTime | None
+    is_mutual: bool | None
+    is_special: bool | None
+    official_verification: FollowingOfficialVerification | None
+
+
+class LlmFollowingUsersResult(BaseModel):
+    users: list[LlmFollowingUser]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool
+
+
 def _project(result: BaseModel, model: type[BaseModel]) -> BaseModel:
     return model.model_validate(result.model_dump(mode="python"))
 
@@ -184,3 +203,7 @@ def project_search_videos(result: BaseModel) -> BaseModel:
 
 def project_following_feed(result: BaseModel) -> BaseModel:
     return _project(result, LlmFollowingFeedResult)
+
+
+def project_following_users(result: BaseModel) -> BaseModel:
+    return _project(result, LlmFollowingUsersResult)

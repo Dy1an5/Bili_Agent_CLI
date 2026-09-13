@@ -4,13 +4,19 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from bili_agent_cli.bilibili.following import FollowingFeedError, fetch_following_feed
+from bili_agent_cli.bilibili.following_feed import (
+    FollowingFeedError,
+    fetch_following_feed,
+)
 from bili_agent_cli.profile import (
     ProfileError,
     get_sessdata_cookie_header,
     load_profile,
 )
-from bili_agent_cli.schemas.following import FollowingFeedQuery, FollowingFeedResponse
+from bili_agent_cli.schemas.following_feed import (
+    FollowingFeedQuery,
+    FollowingFeedResponse,
+)
 
 
 router = APIRouter(prefix="/api/following", tags=["following"])
