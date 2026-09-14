@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from pydantic import PlainSerializer
+from pydantic import BeforeValidator, PlainSerializer
 
 
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), "UTC+8")
@@ -20,8 +20,16 @@ def format_beijing_time(value: datetime | None) -> str | None:
     return value.astimezone(BEIJING_TIMEZONE).strftime(BEIJING_TIME_FORMAT)
 
 
+def parse_beijing_time(value: object) -> object:
+    if not isinstance(value, str) or not value.endswith(" (UTC+8)"):
+        return value
+    parsed = datetime.strptime(value, BEIJING_TIME_FORMAT)
+    return parsed.replace(tzinfo=BEIJING_TIMEZONE)
+
+
 BeijingTime = Annotated[
     datetime,
+    BeforeValidator(parse_beijing_time),
     PlainSerializer(
         format_beijing_time,
         return_type=str,

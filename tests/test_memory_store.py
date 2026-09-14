@@ -67,7 +67,7 @@ class MemoryStoreTest(unittest.TestCase):
             evidence_table = connection.execute(
                 "SELECT name FROM sqlite_master WHERE name='memory_evidence'"
             ).fetchone()
-        self.assertEqual(version, 2)
+        self.assertEqual(version, 3)
         self.assertIsNotNone(evidence_table)
 
     def test_v1_migration_discards_untrusted_memories(self) -> None:
@@ -94,7 +94,28 @@ class MemoryStoreTest(unittest.TestCase):
 
         self.assertEqual(self.store.list_memories(include_inactive=True), [])
         with sqlite3.connect(self.database_path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+
+    def test_v2_migration_adds_persona_storage(self) -> None:
+        self.database_path.parent.mkdir(parents=True)
+        with sqlite3.connect(self.database_path) as connection:
+            self.store._create_schema_v2(connection)
+            connection.execute("DROP TABLE persona_snapshots")
+            connection.execute("DROP TABLE persona_refresh_runs")
+            connection.execute("PRAGMA user_version = 2")
+
+        self.store.initialize()
+
+        with sqlite3.connect(self.database_path) as connection:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
+        self.assertIn("persona_snapshots", tables)
+        self.assertIn("persona_refresh_runs", tables)
 
     def test_explicit_candidate_is_active_with_evidence(self) -> None:
         result = self.observe(self.candidate())

@@ -36,6 +36,7 @@ class ContentEventType(StrEnum):
     FAVORITE = "favorite"
     WATCH_LATER = "watch_later"
     DISMISS = "dismiss"
+    SEARCH = "search"
 
 
 class UserContentEvent(ScoringModel):

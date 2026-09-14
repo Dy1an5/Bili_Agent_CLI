@@ -22,6 +22,10 @@ SCORING_TABLES = {
     "video_topics",
     "user_content_events",
     "topic_preference_scores",
+    "video_topic_classification_state",
+    "event_topics",
+    "creator_preference_scores",
+    "profile_feature_scores",
 }
 
 
@@ -40,7 +44,7 @@ def test_new_database_initializes_empty_scoring_tables(tmp_path) -> None:
 
     assert SCORING_TABLES <= table_names(store)
     with store.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
         for table in SCORING_TABLES:
             assert connection.execute(
                 f"SELECT count(*) FROM {table}"
@@ -81,6 +85,45 @@ def test_v1_database_migrates_without_losing_video_rows(tmp_path) -> None:
             connection.execute("PRAGMA user_version").fetchone()[0]
             == CONTENT_SCHEMA_VERSION
         )
+
+
+def test_v2_database_migrates_to_persona_schema_without_losing_scores(
+    tmp_path,
+) -> None:
+    store = ContentStore(tmp_path / "content.db")
+    with store.connect() as connection:
+        store._create_schema_v1(connection)
+        store._migrate_v1_to_v2(connection)
+        connection.execute(
+            """
+            INSERT INTO topics (
+                topic_key, label, source_type, created_at, updated_at
+            ) VALUES ('technology.ai', '人工智能', 'code', 'now', 'now')
+            """
+        )
+        topic_id = connection.execute(
+            "SELECT id FROM topics WHERE topic_key='technology.ai'"
+        ).fetchone()[0]
+        connection.execute(
+            """
+            INSERT INTO topic_preference_scores (
+                topic_id, score, positive_evidence_count,
+                negative_evidence_count, algorithm_version, updated_at
+            ) VALUES (?, 42, 2, 0, 'old-v1', 'now')
+            """,
+            (topic_id,),
+        )
+        connection.execute("PRAGMA user_version = 2")
+
+    store.initialize()
+
+    assert SCORING_TABLES <= table_names(store)
+    with store.connect() as connection:
+        row = connection.execute(
+            "SELECT score, raw_score FROM topic_preference_scores"
+        ).fetchone()
+        assert tuple(row) == (42.0, 0.0)
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_scoring_models_define_boundaries_without_computing_scores() -> None:

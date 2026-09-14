@@ -20,6 +20,8 @@ from bili_agent_cli.agent.memory import (
     MemoryStorageError,
 )
 from bili_agent_cli.agent.models import AgentMemoryResult, AgentMemoryStatus
+from bili_agent_cli.persona.models import GetUserProfileArgs
+from bili_agent_cli.persona.service import PersonaError, PersonaService
 
 
 if TYPE_CHECKING:
@@ -35,6 +37,7 @@ RECOVERABLE_CHAT_ERRORS = (
 
 _prompt_session: PromptSession[str] | None = None
 _enhanced_input_disabled = False
+persona_service = PersonaService(memory_store=memory_store)
 
 
 def _get_prompt_session() -> PromptSession[str]:
@@ -92,7 +95,7 @@ async def run(arguments: argparse.Namespace) -> None:
     session_id = None
     print(
         "输入 /new 开始新会话，/context 查看上下文，"
-        "/memory 管理记忆，/exit 退出。"
+        "/memory 管理记忆，/persona 查看画像，/exit 退出。"
     )
 
     while True:
@@ -125,6 +128,10 @@ async def run(arguments: argparse.Namespace) -> None:
 
         if task == "/memory" or task.startswith("/memory "):
             _handle_memory_command(task)
+            continue
+
+        if task == "/persona" or task.startswith("/persona "):
+            await _handle_persona_command(task)
             continue
 
         try:
@@ -238,6 +245,24 @@ def _handle_memory_command(command: str) -> None:
             raise ValueError("未知命令或参数数量不正确；输入 /memory 查看帮助")
     except (MemoryNotFoundError, MemoryStorageError, ValueError) as error:
         print(f"记忆> 操作失败：{error}", file=sys.stderr)
+
+
+async def _handle_persona_command(command: str) -> None:
+    parts = command.split()
+    if len(parts) > 2 or (len(parts) == 2 and parts[1] != "refresh"):
+        print("画像> 用法：/persona [refresh]", file=sys.stderr)
+        return
+    try:
+        result = await persona_service.get_profile(
+            GetUserProfileArgs(refresh=len(parts) == 2)
+        )
+    except PersonaError as error:
+        print(f"画像> 生成失败：{error}", file=sys.stderr)
+        return
+    print(
+        "画像> "
+        + json.dumps(result.model_dump(mode="json"), ensure_ascii=False, indent=2)
+    )
 
 
 def _print_memory_help() -> None:

@@ -74,6 +74,9 @@ SYSTEM_PROMPT = """
 不编造视频
 涉及用户数据时优先调用工具
 推荐必须解释依据
+用户明确要求分析画像或根据个人喜好推荐时，先调用 get_user_profile
+普通搜索、查看动态或指定条件查询不要调用 get_user_profile
+画像中的 explicit_preferences 高于 inferred；冲突时服从明确偏好并说明
 没登录时不要尝试访问账号接口
 用户要求继续翻页时，优先使用最近 pagination_state 中的 next_arguments
 pagination_state 的 has_more 为 false 时，不要重复请求同一页
@@ -489,6 +492,7 @@ async def run_agent(
                                 session=session,
                                 current_turn_id=pending_turn.id,
                                 trusted_sources=source_candidates,
+                                on_usage=record_usage,
                             ),
                         )
                         pagination_state = extract_pagination_state(

@@ -25,7 +25,7 @@ from .models import (
 )
 
 MEMORY_DB_PATH = PRIVACY_DIR / "memory.db"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 PENDING_TTL_DAYS = 30
 SIMILARITY_THRESHOLD = 0.65
 KEY_SIGNATURE_STOP_WORDS = {
@@ -187,10 +187,15 @@ class MemoryStore:
                 raise MemoryStorageError("Memory 数据库版本高于当前程序")
             if version == 0:
                 self._create_schema_v2(connection)
-                connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                connection.execute("PRAGMA user_version = 2")
+                version = 2
             elif version == 1:
                 self._migrate_v1_to_v2(connection)
-                connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                connection.execute("PRAGMA user_version = 2")
+                version = 2
+            if version == 2:
+                self._migrate_v2_to_v3(connection)
+                connection.execute("PRAGMA user_version = 3")
 
     @staticmethod
     def _create_schema_v2(connection: sqlite3.Connection) -> None:
@@ -300,6 +305,26 @@ class MemoryStore:
                 user_excerpt TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 UNIQUE(memory_id, source_ref)
+            );
+        """)
+
+    @staticmethod
+    def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS persona_snapshots (
+                version INTEGER PRIMARY KEY AUTOINCREMENT,
+                content_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS persona_refresh_runs (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                sources_json TEXT NOT NULL,
+                counts_json TEXT NOT NULL,
+                errors_json TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT
             );
         """)
 
@@ -847,6 +872,118 @@ class MemoryStore:
                 parameters,
             )
             return cursor.rowcount
+
+    def latest_persona_snapshot(self) -> dict[str, object] | None:
+        self.initialize()
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT version, content_json FROM persona_snapshots
+                ORDER BY version DESC LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        value = json.loads(row["content_json"])
+        if not isinstance(value, dict):
+            raise MemoryStorageError("画像快照格式不正确")
+        value["snapshot_version"] = int(row["version"])
+        return value
+
+    def save_persona_snapshot(self, content: dict[str, object]) -> int:
+        self.initialize()
+        now = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO persona_snapshots (content_json, created_at)
+                VALUES (?, ?)
+                """,
+                (
+                    json.dumps(content, ensure_ascii=False, separators=(",", ":")),
+                    now.isoformat(),
+                ),
+            )
+            version = int(cursor.lastrowid)
+            stored_content = dict(content)
+            stored_content["snapshot_version"] = version
+            connection.execute(
+                "UPDATE persona_snapshots SET content_json = ? WHERE version = ?",
+                (
+                    json.dumps(
+                        stored_content,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    version,
+                ),
+            )
+            connection.execute(
+                """
+                DELETE FROM persona_snapshots
+                WHERE version NOT IN (
+                    SELECT version FROM persona_snapshots
+                    ORDER BY version DESC LIMIT 20
+                )
+                """
+            )
+        return version
+
+    def start_persona_refresh(self, sources: dict[str, object]) -> UUID:
+        self.initialize()
+        run_id = uuid4()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO persona_refresh_runs (
+                    id, status, sources_json, counts_json, errors_json,
+                    started_at, completed_at
+                ) VALUES (?, 'running', ?, '{}', '[]', ?, NULL)
+                """,
+                (
+                    str(run_id),
+                    json.dumps(sources, ensure_ascii=False, separators=(",", ":")),
+                    utc_now().isoformat(),
+                ),
+            )
+        return run_id
+
+    def finish_persona_refresh(
+        self,
+        run_id: UUID,
+        *,
+        status: str,
+        counts: dict[str, object],
+        errors: list[str],
+    ) -> None:
+        self.initialize()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE persona_refresh_runs
+                SET status = ?, counts_json = ?, errors_json = ?,
+                    completed_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    json.dumps(counts, ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(errors, ensure_ascii=False, separators=(",", ":")),
+                    utc_now().isoformat(),
+                    str(run_id),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise MemoryStorageError("画像刷新记录不存在")
+            connection.execute(
+                """
+                DELETE FROM persona_refresh_runs
+                WHERE id NOT IN (
+                    SELECT id FROM persona_refresh_runs
+                    ORDER BY started_at DESC LIMIT 100
+                )
+                """
+            )
 
 
 def _row_to_memory(row: sqlite3.Row) -> MemoryItem:

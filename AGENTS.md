@@ -6,8 +6,8 @@
 # 项目参考
 本项目需要通过b站接口返回,写入数据,遇到接口有关的问题可以参考以下项目
 
-项目一: ~/Projects/PiliPlus
-项目二: ~/Projects/newBili
+项目一: ~/Projects/reference/PiliPlus
+项目二: ~/Projects/me/newBili
 
 # 操作规范
 需要对b站接口进行操作时,查看参考项目是如何实现的,再进行修改

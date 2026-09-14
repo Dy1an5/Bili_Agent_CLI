@@ -44,15 +44,22 @@ class CliParserTest(unittest.TestCase):
         profile = parser.parse_args(["profile"])
         get = parser.parse_args(["get", "/x/web-interface/nav"])
         agent = parser.parse_args(["agent"])
+        persona_show = parser.parse_args(["persona", "show"])
+        persona_refresh = parser.parse_args(
+            ["persona", "refresh", "--max-new-videos", "120"]
+        )
 
         self.assertEqual(login.timeout, 180)
         self.assertEqual(profile.command, "profile")
         self.assertEqual(get.path, "/x/web-interface/nav")
         self.assertEqual(agent.command, "agent")
+        self.assertEqual(persona_show.persona_action, "show")
+        self.assertEqual(persona_refresh.max_new_videos, 120)
         self.assertTrue(callable(login.handler))
         self.assertTrue(callable(profile.handler))
         self.assertTrue(callable(get.handler))
         self.assertTrue(callable(agent.handler))
+        self.assertTrue(callable(persona_show.handler))
 
     def test_get_command_parses_repeated_parameters(self) -> None:
         arguments = _create_parser().parse_args(

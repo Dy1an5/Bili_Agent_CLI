@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from bili_agent_cli.agent.models import AgentFinalAnswer
 from bili_agent_cli.agent.tool_context import ToolExecutionContext
+from bili_agent_cli.persona.models import GetUserProfileArgs, UserProfileResponse
 
 from bili_agent_cli.schemas.favorites import (
     FavoriteFolderListResponse,
@@ -57,6 +58,7 @@ from .tools.bili.save_favorites import (
     prepare_save_videos_to_favorite_folder_tool,
 )
 from .tools.bili.search_videos import search_videos_tool
+from .tools.get_user_profile import get_user_profile_tool
 
 ToolExecutor = Callable[
     [BaseModel, ToolExecutionContext | None],
@@ -154,6 +156,15 @@ async def _run_get_user_dynamics_tool(
         raise TypeError("get_user_dynamics_tool 收到了错误的参数模型")
 
     return await get_user_dynamics_tool(args)
+
+
+async def _run_get_user_profile_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
+    if not isinstance(args, GetUserProfileArgs):
+        raise TypeError("get_user_profile_tool 收到了错误的参数模型")
+    return await get_user_profile_tool(args, context)
 
 
 async def _run_prepare_favorite_save_tool(
@@ -269,6 +280,19 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         result_model=UserDynamicsResponse,
         executor=_run_get_user_dynamics_tool,
         result_projector=project_user_dynamics,
+    ),
+    "get_user_profile": ToolDefinition(
+        name="get_user_profile",
+        description=(
+            "基于已经写入 content.db 的收藏、稍后再看、观看历史和搜索词，"
+            "结合 memory.db 中的明确长期偏好生成用户画像。"
+            "用户要求分析画像、我喜欢什么、或明确要求根据个人喜好推荐时调用；"
+            "普通搜索和查看动态不要调用。refresh=false 只读取最近快照。"
+        ),
+        args_model=GetUserProfileArgs,
+        result_model=UserProfileResponse,
+        executor=_run_get_user_profile_tool,
+        result_projector=lambda result: result,
     ),
     "prepare_save_videos_to_favorite_folder": ToolDefinition(
         name="prepare_save_videos_to_favorite_folder",

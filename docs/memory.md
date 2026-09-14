@@ -51,7 +51,7 @@ flowchart TD
 4. 因此本轮新写入的记忆只会影响后续请求，不会反过来改变本轮回答。
 5. 提取或存储失败不会撤销已经完成的回答；响应会携带相应失败状态。
 
-当前 `POST /agent/run` 会执行这两条链路。Memory 管理只提供交互式 CLI 命令，目前没有独立的 HTTP 管理接口。
+交互式 Agent 会执行这两条链路。Memory 管理通过交互式 CLI 命令完成。
 
 ## 3. 数据模型
 
@@ -147,7 +147,7 @@ privacy/memory.db
 
 程序会把 `privacy/` 权限设置为 `0700`，把数据库文件权限设置为 `0600`。这是文件权限隔离，不是数据库加密。
 
-当前 `PRAGMA user_version = 2`。
+当前 `PRAGMA user_version = 3`。
 
 ### 4.1 memory_items
 
@@ -199,20 +199,21 @@ CREATE TABLE memory_evidence (
 
 连接会启用 `PRAGMA foreign_keys = ON`。
 
-### 4.3 Persona 预留表
+### 4.3 Persona 表
 
-全新 v2 数据库还会创建：
+数据库还会创建：
 
 - `persona_snapshots`
 - `persona_refresh_runs`
 
-它们为未来的用户画像快照和刷新任务预留，当前 Memory 写入、读取和 CLI 管理链路尚未使用。
+`persona_snapshots` 保存最近 20 个画像快照，`persona_refresh_runs` 保存最近 100 次刷新状态、来源、计数和错误。画像实现与评分细节见 [`persona.md`](persona.md)。
 
 ### 4.4 Schema 初始化与迁移
 
-- 数据库版本为 0：直接创建 v2 表。
-- 数据库版本为 1：删除旧 `memory_items` 并创建 v2 `memory_items` 与 `memory_evidence`。v1 记录因为没有可靠证据和作用域而不会迁移。
-- 数据库版本高于 2：拒绝运行并抛出 `MemoryStorageError`。
+- 数据库版本为 0：直接创建当前表。
+- 数据库版本为 1：删除旧 `memory_items` 并创建可靠的 Memory 表；v1 记录因为没有证据和作用域而不会迁移。
+- 数据库版本为 2：保留 Memory 数据并增加画像快照和刷新记录表。
+- 数据库版本高于 3：拒绝运行并抛出 `MemoryStorageError`。
 
 v1 → v2 是破坏性迁移，不自动备份旧 Memory 数据。
 
@@ -611,8 +612,7 @@ DeepSeek 强制工具调用当前必须与 `thinking: {"type": "disabled"}` 一�
 - 写入证据规范化使用有限的同义词规则，未来领域增多时需要扩充或改成可配置词表。
 - 没有向量检索、Embedding、学习排序、时间衰减或使用反馈权重。
 - 自动合并保留第一版 content；不会自动用更新文案改写记忆。
-- Persona 相关表只是预留，尚未形成自动用户画像刷新链路。
-- Memory 管理当前只有 CLI，没有单独的 HTTP API。
+- Persona 已提供按需、增量刷新链路，但不会定时执行或自动同步 B 站数据。
 
 如果以后引入 Embedding 或模型重排，建议仍保留当前作用域资格检查和 active-only 约束，把语义模型用于候选排序而不是绕过生命周期与安全过滤。
 

@@ -54,6 +54,7 @@ class AgentToolsTest(unittest.TestCase):
                 "get_watch_history",
                 "search_videos",
                 "get_user_dynamics",
+                "get_user_profile",
                 "prepare_save_videos_to_favorite_folder",
                 "commit_save_videos_to_favorite_folder",
             },
@@ -125,6 +126,14 @@ class AgentToolsTest(unittest.TestCase):
         self.assertIn(
             "source_ids",
             schemas["submit_agent_answer"]["parameters"]["properties"],
+        )
+        persona_parameters = schemas["get_user_profile"]["parameters"]
+        self.assertTrue(
+            persona_parameters["properties"]["refresh"]["default"]
+        )
+        self.assertEqual(
+            persona_parameters["properties"]["max_new_videos"]["default"],
+            60,
         )
 
     def test_agent_source_keeps_old_fields_and_derives_source_id(self) -> None:

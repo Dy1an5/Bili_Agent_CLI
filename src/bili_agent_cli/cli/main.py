@@ -15,8 +15,11 @@ from bili_agent_cli.agent.deepseek.errors import ModelCallError
 from bili_agent_cli.bilibili.auth import BilibiliLoginError
 from bili_agent_cli.bilibili.debug import BilibiliDebugError
 from bili_agent_cli.profile import ProfileError
+from bili_agent_cli.persona.service import PersonaError
+from bili_agent_cli.content.store import ContentStorageError
+from bili_agent_cli.agent.memory.store import MemoryStorageError
 
-from . import agent, auth, debug
+from . import agent, auth, debug, persona
 
 
 def _create_parser() -> argparse.ArgumentParser:
@@ -26,6 +29,7 @@ def _create_parser() -> argparse.ArgumentParser:
     auth.register_commands(subparsers)
     debug.register_command(subparsers)
     agent.register_command(subparsers)
+    persona.register_command(subparsers)
 
     return parser
 
@@ -41,6 +45,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         ContextBudgetExceededError,
         ModelCallError,
         ProfileError,
+        PersonaError,
+        ContentStorageError,
+        MemoryStorageError,
         SessionNotFoundError,
         httpx.RequestError,
     ) as error:

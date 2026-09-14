@@ -41,6 +41,7 @@ uv run bili-agent-cli agent
 /new       开始新会话
 /context   查看当前会话上下文
 /memory    管理长期记忆
+/persona   查看或刷新用户画像
 /exit      退出
 ```
 
@@ -80,7 +81,20 @@ Agent 返回的发布时间、收藏时间、动态发布时间、观看时间�
 
 当前策略是“读取即入库”：每次 Agent 读取都先实时请求 B 站，再执行规范化、CID 补全和事务写入，最后返回结果。当前不会定时刷新、不会新增后台同步任务，也不会为了回答“今天的动态”等请求优先读取旧数据库。单个视频无法补全 CID 时，其余视频仍会入库并返回 `status=partial` 和 `skipped_count`，失败项会记录在 `ingestion_failures` 供后续排查。
 
-数据库已为空闲的主题、视频主题、用户内容事件和主题偏好分数预留结构，但当前版本不调用大模型推断主题、不计算偏好分数，也不改变视频排序。
+数据库还保存画像所需的行为事件、视频主题分类状态和偏好分数。画像刷新只分析已经入库的数据，不会暗中请求 B 站或启动后台同步；实时内容仍由对应读取工具获取并顺便入库。
+
+## 用户画像
+
+画像由两类信号合并：`memory.db` 中用户明确表达的偏好、约束和目标，以及 `content.db` 中收藏、稍后再看、观看历史和搜索产生的行为证据。代码负责事件去重、时间衰减、聚合和打分；DeepSeek 只负责把视频元数据和搜索词映射到固定主题，并给出置信度。
+
+```bash
+uv run bili-agent-cli persona show
+uv run bili-agent-cli persona refresh --max-new-videos 60
+```
+
+交互式 Agent 中可使用 `/persona` 和 `/persona refresh`。Agent 也能按需调用 `get_user_profile`；`refresh=false` 只读取最近快照，`refresh=true` 增量分类变化或尚未分类的视频。当前只使用标题、简介、UP 主、时长和收藏夹名称，不读取字幕。字幕留到后续高评分视频的深度分析阶段。
+
+评分、置信度、数据表和调用流程详见 [`docs/persona.md`](docs/persona.md)。
 
 ## 长期记忆
 

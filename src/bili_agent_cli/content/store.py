@@ -16,7 +16,7 @@ from .models import VideoRecord
 
 
 CONTENT_DB_PATH = PRIVACY_DIR / "content.db"
-CONTENT_SCHEMA_VERSION = 2
+CONTENT_SCHEMA_VERSION = 3
 
 
 class ContentStorageError(Exception):
@@ -71,6 +71,10 @@ class ContentStore:
             if version == 1:
                 self._migrate_v1_to_v2(connection)
                 connection.execute("PRAGMA user_version = 2")
+                version = 2
+            if version == 2:
+                self._migrate_v2_to_v3(connection)
+                connection.execute("PRAGMA user_version = 3")
 
     @staticmethod
     def _create_schema_v1(connection: sqlite3.Connection) -> None:
@@ -293,6 +297,96 @@ class ContentStore:
                 ),
                 algorithm_version TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+        """)
+
+    @staticmethod
+    def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
+        connection.executescript("""
+            ALTER TABLE topics ADD COLUMN parent_id INTEGER
+                REFERENCES topics(id) ON DELETE SET NULL;
+            ALTER TABLE topics ADD COLUMN level INTEGER NOT NULL DEFAULT 2;
+            ALTER TABLE topics ADD COLUMN taxonomy_version TEXT NOT NULL
+                DEFAULT 'taxonomy.v1';
+            ALTER TABLE topics ADD COLUMN is_open_tag INTEGER NOT NULL DEFAULT 0
+                CHECK (is_open_tag IN (0, 1));
+
+            ALTER TABLE video_topics ADD COLUMN classifier_version TEXT NOT NULL
+                DEFAULT 'reserved-v1';
+            ALTER TABLE video_topics ADD COLUMN prompt_version TEXT NOT NULL
+                DEFAULT 'reserved-v1';
+            ALTER TABLE video_topics ADD COLUMN classified_at TEXT;
+
+            ALTER TABLE user_content_events ADD COLUMN source_ref TEXT;
+            ALTER TABLE user_content_events ADD COLUMN active INTEGER NOT NULL
+                DEFAULT 1 CHECK (active IN (0, 1));
+            ALTER TABLE user_content_events ADD COLUMN derived_at TEXT;
+
+            CREATE UNIQUE INDEX idx_content_events_source_ref
+            ON user_content_events(source_ref) WHERE source_ref IS NOT NULL;
+
+            ALTER TABLE topic_preference_scores ADD COLUMN raw_score REAL
+                NOT NULL DEFAULT 0;
+            ALTER TABLE topic_preference_scores ADD COLUMN confidence REAL
+                NOT NULL DEFAULT 0 CHECK (confidence >= 0 AND confidence <= 1);
+            ALTER TABLE topic_preference_scores ADD COLUMN distinct_video_count
+                INTEGER NOT NULL DEFAULT 0 CHECK (distinct_video_count >= 0);
+            ALTER TABLE topic_preference_scores ADD COLUMN last_evidence_at TEXT;
+
+            CREATE TABLE video_topic_classification_state (
+                bvid TEXT NOT NULL,
+                cid TEXT NOT NULL,
+                input_hash TEXT NOT NULL,
+                status TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                classifier_version TEXT NOT NULL,
+                prompt_version TEXT NOT NULL,
+                taxonomy_version TEXT NOT NULL,
+                last_attempted_at TEXT NOT NULL,
+                last_succeeded_at TEXT,
+                error_code TEXT,
+                PRIMARY KEY (bvid, cid),
+                FOREIGN KEY (bvid, cid) REFERENCES videos(bvid, cid)
+                    ON DELETE CASCADE
+            );
+
+            CREATE TABLE event_topics (
+                event_id TEXT NOT NULL REFERENCES user_content_events(id)
+                    ON DELETE CASCADE,
+                topic_id INTEGER NOT NULL REFERENCES topics(id)
+                    ON DELETE CASCADE,
+                confidence REAL NOT NULL CHECK (
+                    confidence >= 0 AND confidence <= 1
+                ),
+                PRIMARY KEY (event_id, topic_id)
+            );
+
+            CREATE TABLE creator_preference_scores (
+                author_mid TEXT PRIMARY KEY,
+                author_name TEXT,
+                raw_score REAL NOT NULL,
+                score REAL NOT NULL,
+                confidence REAL NOT NULL CHECK (
+                    confidence >= 0 AND confidence <= 1
+                ),
+                distinct_video_count INTEGER NOT NULL CHECK (
+                    distinct_video_count >= 0
+                ),
+                last_evidence_at TEXT,
+                algorithm_version TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE profile_feature_scores (
+                feature_type TEXT NOT NULL,
+                feature_key TEXT NOT NULL,
+                label TEXT NOT NULL,
+                raw_weight REAL NOT NULL,
+                ratio REAL NOT NULL CHECK (ratio >= 0 AND ratio <= 1),
+                evidence_count INTEGER NOT NULL CHECK (evidence_count >= 0),
+                algorithm_version TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (feature_type, feature_key)
             );
         """)
 

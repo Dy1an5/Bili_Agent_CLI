@@ -10,6 +10,7 @@ from bili_agent_cli.bilibili.favorites import FavoriteWriteError
 from bili_agent_cli.bilibili.following_users import FollowingUsersError
 from bili_agent_cli.bilibili.user_dynamics import UserDynamicsError
 from bili_agent_cli.profile import ProfileError
+from bili_agent_cli.persona.service import PersonaError
 from .registry import TOOL_REGISTRY
 
 async def execute_tool(
@@ -41,6 +42,12 @@ async def execute_tool(
         return {
             "ok": False,
             "error": "AUTH_PROFILE_ERROR",
+        }
+
+    except PersonaError:
+        return {
+            "ok": False,
+            "error": "USER_PROFILE_ERROR",
         }
 
     except FollowingUsersError:
