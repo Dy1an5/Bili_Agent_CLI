@@ -23,8 +23,15 @@ FORBIDDEN_VALUE_CHARACTERS = str.maketrans("", "", "!'()*")
 
 
 class WbiSigningError(Exception):
-    def __init__(self, message: str, *, code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        code: int | None = None,
+    ) -> None:
         super().__init__(message)
+        self.status = status
         self.code = code
 
 
@@ -93,7 +100,8 @@ async def fetch_wbi_mixin_key(
         response.raise_for_status()
     except httpx.HTTPStatusError as error:
         raise WbiSigningError(
-            f"WBI 密钥请求失败，HTTP {error.response.status_code}"
+            f"WBI 密钥请求失败，HTTP {error.response.status_code}",
+            status=error.response.status_code,
         ) from error
     except httpx.RequestError as error:
         raise WbiSigningError("WBI 密钥网络请求失败") from error

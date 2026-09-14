@@ -8,8 +8,12 @@ from unittest.mock import AsyncMock, patch
 from bili_agent_cli.agent.executor import execute_tool
 from bili_agent_cli.agent.models import AgentSource
 from bili_agent_cli.agent.registry import TOOL_REGISTRY, build_tool_schemas
-from bili_agent_cli.agent.result_models import LlmFollowingUsersResult
+from bili_agent_cli.agent.result_models import (
+    LlmFollowingUsersResult,
+    LlmUserDynamicsResult,
+)
 from bili_agent_cli.bilibili.following_users import FollowingUsersError
+from bili_agent_cli.bilibili.user_dynamics import UserDynamicsError
 from bili_agent_cli.schemas.favorites import (
     FavoriteFolder,
     FavoriteFolderListResponse,
@@ -28,6 +32,13 @@ from bili_agent_cli.schemas.following_users import (
     FollowingUser,
     FollowingUsersResponse,
 )
+from bili_agent_cli.schemas.user_dynamics import (
+    UserDynamicAuthor,
+    UserDynamicContent,
+    UserDynamicItem,
+    UserDynamicsResponse,
+    UserDynamicStats,
+)
 
 
 class AgentToolsTest(unittest.TestCase):
@@ -42,6 +53,7 @@ class AgentToolsTest(unittest.TestCase):
                 "get_watch_later",
                 "get_watch_history",
                 "search_videos",
+                "get_user_dynamics",
             },
         )
 
@@ -71,6 +83,21 @@ class AgentToolsTest(unittest.TestCase):
         self.assertIn(
             "最近关注",
             following_parameters["properties"]["sort"]["description"],
+        )
+        dynamics_parameters = schemas["get_user_dynamics"]["parameters"]
+        self.assertFalse(dynamics_parameters["additionalProperties"])
+        self.assertEqual(dynamics_parameters["required"], ["user_mid"])
+        self.assertEqual(
+            dynamics_parameters["properties"]["user_mid"]["pattern"],
+            r"^[1-9]\d*$",
+        )
+        self.assertIn(
+            "get_following_users",
+            dynamics_parameters["properties"]["user_mid"]["description"],
+        )
+        self.assertIn(
+            "自动遍历所有上游 offset 分页",
+            schemas["get_user_dynamics"]["description"],
         )
         self.assertIn("submit_agent_answer", schemas)
         self.assertIn(
@@ -332,6 +359,149 @@ class AgentToolsTest(unittest.TestCase):
             {"get_following_users": invalid_definition},
         ):
             result = asyncio.run(execute_tool("get_following_users", {}))
+
+        self.assertEqual(
+            result,
+            {"ok": False, "error": "INVALID_LLM_TOOL_RESULT"},
+        )
+
+    @staticmethod
+    def _user_dynamics_response() -> UserDynamicsResponse:
+        return UserDynamicsResponse(
+            user_mid="456",
+            items=[
+                UserDynamicItem(
+                    dynamic_id="101",
+                    type="DYNAMIC_TYPE_AV",
+                    published_at=1_757_472_400,
+                    visible=True,
+                    is_pinned=False,
+                    author=UserDynamicAuthor(
+                        mid="456",
+                        name="测试UP主",
+                        avatar_url="https://i0.hdslb.com/avatar.jpg",
+                    ),
+                    content=UserDynamicContent(
+                        major_type="MAJOR_TYPE_ARCHIVE",
+                        title="动态视频",
+                        text="动态正文",
+                        bvid="BV1dynamic",
+                        jump_url="https://www.bilibili.com/video/BV1dynamic",
+                        cover_url="https://i0.hdslb.com/cover.jpg",
+                        image_urls=["https://i0.hdslb.com/picture.jpg"],
+                    ),
+                    stats=UserDynamicStats(
+                        likes=10,
+                        replies=2,
+                        reposts=1,
+                        favorites=3,
+                    ),
+                )
+            ],
+            total_count=1,
+            skipped_count=0,
+            pages_fetched=2,
+        )
+
+    def test_executes_user_dynamics_tool_and_projects_result(self) -> None:
+        response = self._user_dynamics_response()
+        with (
+            patch(
+                "bili_agent_cli.agent.tools.bili.get_user_dynamics.load_profile",
+                return_value={"SESSDATA": "test-value"},
+            ),
+            patch(
+                "bili_agent_cli.agent.tools.bili.get_user_dynamics.fetch_all_user_dynamics",
+                new=AsyncMock(return_value=response),
+            ) as fetch_mock,
+        ):
+            result = asyncio.run(
+                execute_tool("get_user_dynamics", {"user_mid": "456"})
+            )
+
+        self.assertTrue(result["ok"])
+        fetch_mock.assert_awaited_once_with("456", "SESSDATA=test-value")
+        self.assertEqual(result["data"]["user_mid"], "456")
+        self.assertEqual(result["data"]["pages_fetched"], 2)
+        item = result["data"]["items"][0]
+        self.assertEqual(item["published_at"], "2025-09-10 10:46 (UTC+8)")
+        self.assertEqual(
+            item["content"]["source_id"],
+            "bilibili:video:BV1dynamic",
+        )
+        self.assertNotIn("visible", item)
+        self.assertNotIn("avatar_url", item["author"])
+        self.assertNotIn("cover_url", item["content"])
+        self.assertNotIn("image_urls", item["content"])
+
+    def test_rejects_invalid_user_dynamics_arguments(self) -> None:
+        for arguments in (
+            {},
+            {"user_mid": "0"},
+            {"user_mid": "UP主名字"},
+            {"user_mid": "456", "unknown": True},
+        ):
+            with self.subTest(arguments=arguments):
+                result = asyncio.run(
+                    execute_tool("get_user_dynamics", arguments)
+                )
+                self.assertEqual(
+                    result,
+                    {"ok": False, "error": "INVALID_TOOL_ARGUMENTS"},
+                )
+
+    def test_maps_user_dynamics_domain_error_to_stable_code(self) -> None:
+        with patch(
+            "bili_agent_cli.agent.registry.get_user_dynamics_tool",
+            new=AsyncMock(side_effect=UserDynamicsError("sensitive detail")),
+        ):
+            result = asyncio.run(
+                execute_tool("get_user_dynamics", {"user_mid": "456"})
+            )
+
+        self.assertEqual(
+            result,
+            {"ok": False, "error": "USER_DYNAMICS_FETCH_ERROR"},
+        )
+        self.assertNotIn("sensitive", str(result))
+
+    def test_rejects_invalid_user_dynamics_result(self) -> None:
+        definition = TOOL_REGISTRY["get_user_dynamics"]
+        invalid_definition = replace(
+            definition,
+            executor=AsyncMock(return_value={"user_mid": "456", "items": []}),
+        )
+        with patch.dict(
+            TOOL_REGISTRY,
+            {"get_user_dynamics": invalid_definition},
+        ):
+            result = asyncio.run(
+                execute_tool("get_user_dynamics", {"user_mid": "456"})
+            )
+
+        self.assertEqual(
+            result,
+            {"ok": False, "error": "INVALID_TOOL_RESULT"},
+        )
+
+    def test_rejects_invalid_user_dynamics_projection(self) -> None:
+        definition = TOOL_REGISTRY["get_user_dynamics"]
+
+        def invalid_projector(result):
+            return LlmUserDynamicsResult.model_validate({})
+
+        invalid_definition = replace(
+            definition,
+            executor=AsyncMock(return_value=self._user_dynamics_response()),
+            result_projector=invalid_projector,
+        )
+        with patch.dict(
+            TOOL_REGISTRY,
+            {"get_user_dynamics": invalid_definition},
+        ):
+            result = asyncio.run(
+                execute_tool("get_user_dynamics", {"user_mid": "456"})
+            )
 
         self.assertEqual(
             result,

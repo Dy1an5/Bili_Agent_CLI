@@ -13,6 +13,7 @@ from bili_agent_cli.schemas.following_feed import (
 )
 from bili_agent_cli.schemas.following_users import FollowingOfficialVerification
 from bili_agent_cli.schemas.history import HistoryResponse
+from bili_agent_cli.schemas.user_dynamics import UserDynamicStats
 
 
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), "UTC+8")
@@ -175,6 +176,45 @@ class LlmFollowingUsersResult(BaseModel):
     has_more: bool
 
 
+class LlmUserDynamicAuthor(BaseModel):
+    mid: str | None
+    name: str | None
+
+
+class LlmUserDynamicContent(BaseModel):
+    major_type: str | None
+    title: str | None
+    text: str | None
+    bvid: str | None
+    jump_url: str | None
+
+    @computed_field
+    @property
+    def source_id(self) -> str | None:
+        if self.bvid is None:
+            return None
+        return build_video_source_id(self.bvid)
+
+
+class LlmUserDynamicItem(BaseModel):
+    dynamic_id: str
+    type: str | None
+    published_at: BeijingTime | None
+    is_pinned: bool | None
+    author: LlmUserDynamicAuthor | None
+    content: LlmUserDynamicContent
+    stats: UserDynamicStats
+    original: LlmUserDynamicItem | None
+
+
+class LlmUserDynamicsResult(BaseModel):
+    user_mid: str
+    items: list[LlmUserDynamicItem]
+    total_count: int
+    skipped_count: int
+    pages_fetched: int
+
+
 def _project(result: BaseModel, model: type[BaseModel]) -> BaseModel:
     return model.model_validate(result.model_dump(mode="python"))
 
@@ -207,3 +247,7 @@ def project_following_feed(result: BaseModel) -> BaseModel:
 
 def project_following_users(result: BaseModel) -> BaseModel:
     return _project(result, LlmFollowingUsersResult)
+
+
+def project_user_dynamics(result: BaseModel) -> BaseModel:
+    return _project(result, LlmUserDynamicsResult)

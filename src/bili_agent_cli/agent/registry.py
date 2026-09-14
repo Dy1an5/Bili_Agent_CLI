@@ -20,6 +20,10 @@ from bili_agent_cli.schemas.following_users import (
 )
 from bili_agent_cli.schemas.history import HistoryQuery, HistoryResponse
 from bili_agent_cli.schemas.search import SearchVideoQuery, SearchVideoResponse
+from bili_agent_cli.schemas.user_dynamics import (
+    UserDynamicsArgs,
+    UserDynamicsResponse,
+)
 from bili_agent_cli.schemas.watch_later import WatchLaterQuery, WatchLaterResponse
 
 from .result_models import (
@@ -29,6 +33,7 @@ from .result_models import (
     project_following_users,
     project_watch_history,
     project_search_videos,
+    project_user_dynamics,
     project_watch_later,
 )
 from .tools.bili.get_favorites import (
@@ -38,6 +43,7 @@ from .tools.bili.get_favorites import (
 from .tools.bili.get_following_feed import get_following_feed_tool
 from .tools.bili.get_following_users import get_following_users_tool
 from .tools.bili.get_history import get_watch_history_tool
+from .tools.bili.get_user_dynamics import get_user_dynamics_tool
 from .tools.bili.get_watch_later import get_watch_later_tool
 from .tools.bili.search_videos import search_videos_tool
 
@@ -103,6 +109,13 @@ async def _run_search_videos_tool(args: BaseModel) -> BaseModel:
         raise TypeError("search_videos_tool 收到了错误的参数模型")
 
     return await search_videos_tool(args)
+
+
+async def _run_get_user_dynamics_tool(args: BaseModel) -> BaseModel:
+    if not isinstance(args, UserDynamicsArgs):
+        raise TypeError("get_user_dynamics_tool 收到了错误的参数模型")
+
+    return await get_user_dynamics_tool(args)
 
 
 TOOL_REGISTRY: dict[str, ToolDefinition] = {
@@ -186,6 +199,19 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         result_model=SearchVideoResponse,
         executor=_run_search_videos_tool,
         result_projector=project_search_videos,
+    ),
+    "get_user_dynamics": ToolDefinition(
+        name="get_user_dynamics",
+        description=(
+            "获取指定 Bilibili UP 主的全部动态。user_mid 可直接由用户提供，"
+            "也可来自 get_following_users 返回的 mid；无需其他前置工具。"
+            "工具会自动遍历所有上游 offset 分页，不需要再次调用工具翻页。"
+            "返回视频、图文、转发等动态；视频内容中的 source_id 可用于引用。"
+        ),
+        args_model=UserDynamicsArgs,
+        result_model=UserDynamicsResponse,
+        executor=_run_get_user_dynamics_tool,
+        result_projector=project_user_dynamics,
     ),
 }
 

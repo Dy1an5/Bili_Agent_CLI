@@ -554,6 +554,99 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
             ["search_videos", "get_watch_later"],
         )
 
+    async def test_user_dynamic_video_is_available_as_validated_source(self) -> None:
+        create_message = AsyncMock(
+            side_effect=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "dynamic-call",
+                            "function": {
+                                "name": "get_user_dynamics",
+                                "arguments": '{"user_mid":"456"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "submit-call",
+                            "function": {
+                                "name": "submit_agent_answer",
+                                "arguments": json.dumps(
+                                    {
+                                        "answer": "引用了转发动态中的原视频",
+                                        "source_ids": [
+                                            "bilibili:video:BV1dynamic"
+                                        ],
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                },
+            ]
+        )
+        tool_result = {
+            "ok": True,
+            "data": {
+                "user_mid": "456",
+                "items": [
+                    {
+                        "dynamic_id": "102",
+                        "type": "DYNAMIC_TYPE_FORWARD",
+                        "author": {"mid": "456", "name": "转发者"},
+                        "content": {"bvid": None, "title": None},
+                        "original": {
+                            "dynamic_id": "101",
+                            "type": "DYNAMIC_TYPE_AV",
+                            "author": {"mid": "789", "name": "原UP主"},
+                            "content": {
+                                "bvid": "BV1dynamic",
+                                "title": "原动态视频",
+                                "source_id": "bilibili:video:BV1dynamic",
+                            },
+                            "original": None,
+                        },
+                    }
+                ],
+                "total_count": 1,
+                "skipped_count": 0,
+                "pages_fetched": 2,
+            },
+        }
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.execute_tool",
+                new=AsyncMock(return_value=tool_result),
+            ),
+        ):
+            response = await run_agent("查看指定 UP 主的全部动态")
+
+        self.assertEqual(len(response.sources), 1)
+        self.assertEqual(response.sources[0].bvid, "BV1dynamic")
+        self.assertEqual(response.sources[0].title, "原动态视频")
+        self.assertEqual(response.sources[0].author_name, "原UP主")
+        self.assertEqual(
+            response.sources[0].source_tools,
+            ["get_user_dynamics"],
+        )
+        session = await self.session_store.get(response.session_id)
+        self.assertEqual(
+            session.turns[-1].evidence_batches[0].tool_name,
+            "get_user_dynamics",
+        )
+
     async def test_unknown_submitted_source_is_rejected_then_retried(self) -> None:
         create_message = AsyncMock(
             side_effect=[

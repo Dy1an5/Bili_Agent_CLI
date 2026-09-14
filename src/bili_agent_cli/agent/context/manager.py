@@ -322,6 +322,39 @@ def _to_source(
     )
 
 
+def _dynamic_item_sources(
+    item: dict[str, Any],
+    *,
+    source_tool: str | None,
+    depth: int = 0,
+) -> list[AgentSource]:
+    if depth > 8:
+        return []
+
+    sources: list[AgentSource] = []
+    author = item.get("author")
+    content = item.get("content")
+    if isinstance(content, dict):
+        source = _to_source(
+            content,
+            author=author if isinstance(author, dict) else None,
+            source_tool=source_tool,
+        )
+        if source is not None:
+            sources.append(source)
+
+    original = item.get("original")
+    if isinstance(original, dict):
+        sources.extend(
+            _dynamic_item_sources(
+                original,
+                source_tool=source_tool,
+                depth=depth + 1,
+            )
+        )
+    return sources
+
+
 def extract_sources(
     tool_result: dict[str, object],
     source_tool: str | None = None,
@@ -351,15 +384,20 @@ def extract_sources(
                 continue
             video = item.get("video")
             author = item.get("author")
-            if not isinstance(video, dict):
-                continue
-            source = _to_source(
-                video,
-                author=author if isinstance(author, dict) else None,
-                source_tool=source_tool,
+            if isinstance(video, dict):
+                source = _to_source(
+                    video,
+                    author=author if isinstance(author, dict) else None,
+                    source_tool=source_tool,
+                )
+                if source is not None:
+                    candidates.append(source)
+            candidates.extend(
+                _dynamic_item_sources(
+                    item,
+                    source_tool=source_tool,
+                )
             )
-            if source is not None:
-                candidates.append(source)
 
     return merge_sources(candidates)
 

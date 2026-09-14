@@ -10,16 +10,24 @@ from bili_agent_cli.agent.result_models import (
     LlmFollowingFeedResult,
     LlmFollowingUsersResult,
     LlmSearchVideoResult,
+    LlmUserDynamicsResult,
     LlmVideoAuthor,
     LlmWatchLaterResult,
     format_beijing_time,
     project_following_users,
+    project_user_dynamics,
 )
 from bili_agent_cli.schemas.common import VideoStats
 from bili_agent_cli.schemas.following_users import (
     FollowingOfficialVerification,
     FollowingUser,
     FollowingUsersResponse,
+)
+from bili_agent_cli.schemas.user_dynamics import (
+    UserDynamicAuthor,
+    UserDynamicContent,
+    UserDynamicItem,
+    UserDynamicsResponse,
 )
 
 
@@ -225,6 +233,70 @@ class SearchProjectionTest(unittest.TestCase):
             payload["videos"][0]["published_at"],
             "2025-09-10 10:46 (UTC+8)",
         )
+
+
+class UserDynamicsProjectionTest(unittest.TestCase):
+    def test_trims_visual_fields_and_derives_nested_video_source(self) -> None:
+        full_result = UserDynamicsResponse(
+            user_mid="456",
+            items=[
+                UserDynamicItem(
+                    dynamic_id="102",
+                    type="DYNAMIC_TYPE_FORWARD",
+                    published_at="2025-09-10T02:46:40Z",
+                    visible=True,
+                    is_pinned=False,
+                    author=UserDynamicAuthor(
+                        mid="456",
+                        name="转发者",
+                        avatar_url="https://i0.hdslb.com/reposter.jpg",
+                    ),
+                    content=UserDynamicContent(text="推荐这个视频"),
+                    original=UserDynamicItem(
+                        dynamic_id="101",
+                        type="DYNAMIC_TYPE_AV",
+                        published_at="2025-09-09T02:46:40Z",
+                        author=UserDynamicAuthor(
+                            mid="789",
+                            name="原UP主",
+                            avatar_url="https://i0.hdslb.com/author.jpg",
+                        ),
+                        content=UserDynamicContent(
+                            major_type="MAJOR_TYPE_ARCHIVE",
+                            title="原动态视频",
+                            bvid="BV1nested",
+                            cover_url="https://i0.hdslb.com/cover.jpg",
+                            image_urls=["https://i0.hdslb.com/picture.jpg"],
+                        ),
+                    ),
+                )
+            ],
+            total_count=1,
+            skipped_count=0,
+            pages_fetched=3,
+        )
+
+        projected = project_user_dynamics(full_result)
+
+        self.assertIsInstance(projected, LlmUserDynamicsResult)
+        payload = projected.model_dump(mode="json")
+        item = payload["items"][0]
+        self.assertEqual(item["published_at"], "2025-09-10 10:46 (UTC+8)")
+        self.assertNotIn("visible", item)
+        self.assertNotIn("avatar_url", item["author"])
+        self.assertNotIn("cover_url", item["content"])
+        self.assertNotIn("image_urls", item["content"])
+        self.assertIsNone(item["content"]["source_id"])
+        original = item["original"]
+        self.assertEqual(
+            original["published_at"],
+            "2025-09-09 10:46 (UTC+8)",
+        )
+        self.assertEqual(
+            original["content"]["source_id"],
+            "bilibili:video:BV1nested",
+        )
+        self.assertEqual(payload["pages_fetched"], 3)
 
 
 class InvalidTimeTest(unittest.TestCase):

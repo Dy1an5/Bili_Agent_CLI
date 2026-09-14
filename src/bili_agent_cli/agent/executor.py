@@ -1,6 +1,7 @@
 from pydantic import ValidationError
 
 from bili_agent_cli.bilibili.following_users import FollowingUsersError
+from bili_agent_cli.bilibili.user_dynamics import UserDynamicsError
 from bili_agent_cli.profile import ProfileError
 from .registry import TOOL_REGISTRY
 
@@ -38,6 +39,12 @@ async def execute_tool(
         return {
             "ok": False,
             "error": "FOLLOWING_USERS_FETCH_ERROR",
+        }
+
+    except UserDynamicsError:
+        return {
+            "ok": False,
+            "error": "USER_DYNAMICS_FETCH_ERROR",
         }
 
     except Exception:

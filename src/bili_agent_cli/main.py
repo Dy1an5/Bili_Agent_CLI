@@ -14,6 +14,8 @@ from bili_agent_cli.routes.favorites import router as favorites_router
 from bili_agent_cli.routes.history import router as history_router
 from bili_agent_cli.routes.watch_later import router as watch_later_router
 from bili_agent_cli.routes.search import router as search_router
+from bili_agent_cli.routes.user_dynamics import router as user_dynamics_router
+
 
 class HealthResponse(BaseModel):
     status: Literal["ok"]
@@ -39,6 +41,7 @@ app.include_router(favorites_router)
 app.include_router(history_router)
 app.include_router(watch_later_router)
 app.include_router(search_router)
+app.include_router(user_dynamics_router)
 app.include_router(agent_router)
 
 

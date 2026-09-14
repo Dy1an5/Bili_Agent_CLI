@@ -133,6 +133,14 @@ curl --get http://127.0.0.1:8000/api/following/feed \
 
 FastAPI 会把 B站的异构动态响应转换为最小视频列表模型，只返回视频动态。输出包含动态 ID、UP主、视频和下一页信息。动态接口没有提供 `cid` 时返回 `null`，进入视频详情后再通过 `bvid` 补齐。
 
+获取指定 UP 主的全部动态：
+
+```bash
+curl http://127.0.0.1:8000/api/users/指定UP主MID/dynamics
+```
+
+该接口使用 WBI 签名并自动读取所有上游分页，返回视频、图文、转发等所有可解析的动态类型。响应中的 `pages_fetched` 是请求的上游页数，`skipped_count` 是缺少动态 ID 或模块结构而无法解析的记录数。此读取操作不使用 CSRF，只会发送登录资料中的 `SESSDATA`。
+
 分页获取当前账号关注的 UP 主：
 
 ```bash
