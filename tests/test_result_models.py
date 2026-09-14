@@ -11,11 +11,13 @@ from bili_agent_cli.agent.result_models import (
     LlmFollowingUsersResult,
     LlmSearchVideoResult,
     LlmUserDynamicsResult,
+    LlmVideoSubtitleResult,
     LlmVideoAuthor,
     LlmWatchLaterResult,
     format_beijing_time,
     project_following_users,
     project_user_dynamics,
+    project_video_subtitle,
 )
 from bili_agent_cli.schemas.common import VideoStats
 from bili_agent_cli.schemas.following_users import (
@@ -28,6 +30,13 @@ from bili_agent_cli.schemas.user_dynamics import (
     UserDynamicContent,
     UserDynamicItem,
     UserDynamicsResponse,
+)
+from bili_agent_cli.schemas.subtitles import (
+    SubtitleCue,
+    SubtitleStatus,
+    SubtitleTrack,
+    SubtitleTrackSource,
+    VideoSubtitleResponse,
 )
 
 
@@ -233,6 +242,44 @@ class SearchProjectionTest(unittest.TestCase):
             payload["videos"][0]["published_at"],
             "2025-09-10 10:46 (UTC+8)",
         )
+
+
+class VideoSubtitleProjectionTest(unittest.TestCase):
+    def test_keeps_evidence_and_pagination_but_trims_cache_metadata(self) -> None:
+        track = SubtitleTrack(
+            language="zh-CN",
+            display_name="中文",
+            source=SubtitleTrackSource.HUMAN,
+        )
+        full_result = VideoSubtitleResponse(
+            status=SubtitleStatus.AVAILABLE,
+            bvid="BV1subtitle",
+            cid="987",
+            track=track,
+            available_tracks=[track],
+            cues=[
+                SubtitleCue(index=0, start_ms=0, end_ms=1000, text="证据")
+            ],
+            source_hash="sha256:" + "a" * 64,
+            total_cues=2,
+            offset=0,
+            limit=1,
+            has_more=True,
+            next_offset=1,
+            fetched_at="2026-09-14T04:00:00Z",
+            cached=True,
+        )
+
+        projected = project_video_subtitle(full_result)
+
+        self.assertIsInstance(projected, LlmVideoSubtitleResult)
+        payload = projected.model_dump(mode="json")
+        self.assertEqual(payload["source_id"], "bilibili:video:BV1subtitle")
+        self.assertEqual(payload["cid"], "987")
+        self.assertEqual(payload["cues"][0]["text"], "证据")
+        self.assertEqual(payload["next_offset"], 1)
+        self.assertNotIn("fetched_at", payload)
+        self.assertNotIn("cached", payload)
 
 
 class UserDynamicsProjectionTest(unittest.TestCase):

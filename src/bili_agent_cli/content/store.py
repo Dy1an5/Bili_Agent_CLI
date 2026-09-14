@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -11,12 +12,17 @@ from bili_agent_cli.content.cid_resolver import CidResolutionFailure
 from bili_agent_cli.profile import PRIVACY_DIR
 from bili_agent_cli.schemas.favorites import FavoriteFolder
 from bili_agent_cli.schemas.search import SearchVideoQuery
+from bili_agent_cli.schemas.subtitles import (
+    SubtitleCue,
+    SubtitleTrack,
+    VideoSubtitleDocument,
+)
 
 from .models import VideoRecord
 
 
 CONTENT_DB_PATH = PRIVACY_DIR / "content.db"
-CONTENT_SCHEMA_VERSION = 3
+CONTENT_SCHEMA_VERSION = 4
 
 
 class ContentStorageError(Exception):
@@ -75,6 +81,10 @@ class ContentStore:
             if version == 2:
                 self._migrate_v2_to_v3(connection)
                 connection.execute("PRAGMA user_version = 3")
+                version = 3
+            if version == 3:
+                self._migrate_v3_to_v4(connection)
+                connection.execute("PRAGMA user_version = 4")
 
     @staticmethod
     def _create_schema_v1(connection: sqlite3.Connection) -> None:
@@ -390,6 +400,41 @@ class ContentStore:
             );
         """)
 
+    @staticmethod
+    def _migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
+        connection.executescript("""
+            CREATE TABLE subtitle_documents (
+                bvid TEXT NOT NULL,
+                cid TEXT NOT NULL,
+                language TEXT NOT NULL,
+                source TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                source_hash TEXT NOT NULL,
+                available_tracks_json TEXT NOT NULL,
+                total_cues INTEGER NOT NULL CHECK (total_cues > 0),
+                fetched_at TEXT NOT NULL,
+                PRIMARY KEY (bvid, cid, language, source)
+            );
+
+            CREATE TABLE subtitle_cues (
+                bvid TEXT NOT NULL,
+                cid TEXT NOT NULL,
+                language TEXT NOT NULL,
+                source TEXT NOT NULL,
+                cue_index INTEGER NOT NULL CHECK (cue_index >= 0),
+                start_ms INTEGER NOT NULL CHECK (start_ms >= 0),
+                end_ms INTEGER NOT NULL CHECK (end_ms > start_ms),
+                text TEXT NOT NULL CHECK (length(text) > 0),
+                PRIMARY KEY (bvid, cid, language, source, cue_index),
+                FOREIGN KEY (bvid, cid, language, source)
+                    REFERENCES subtitle_documents(bvid, cid, language, source)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX idx_subtitle_documents_video
+            ON subtitle_documents(bvid, cid, fetched_at DESC);
+        """)
+
     def get_default_cid(self, bvid: str) -> str | None:
         self.initialize()
         with self.connect() as connection:
@@ -398,6 +443,143 @@ class ContentStore:
                 (bvid,),
             ).fetchone()
         return str(row["cid"]) if row is not None else None
+
+    def save_subtitle_document(self, document: VideoSubtitleDocument) -> None:
+        """按分 P、语言和来源缓存完整规范化字幕。"""
+
+        self.initialize()
+        track = document.track
+        available_tracks_json = json.dumps(
+            [item.model_dump(mode="json") for item in document.available_tracks],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        key = (
+            document.bvid,
+            document.cid,
+            track.language,
+            track.source.value,
+        )
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO subtitle_documents (
+                    bvid, cid, language, source, display_name, source_hash,
+                    available_tracks_json, total_cues, fetched_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(bvid, cid, language, source) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    source_hash = excluded.source_hash,
+                    available_tracks_json = excluded.available_tracks_json,
+                    total_cues = excluded.total_cues,
+                    fetched_at = excluded.fetched_at
+                """,
+                (
+                    *key,
+                    track.display_name,
+                    document.source_hash,
+                    available_tracks_json,
+                    len(document.cues),
+                    _iso(document.fetched_at),
+                ),
+            )
+            connection.execute(
+                """
+                DELETE FROM subtitle_cues
+                WHERE bvid = ? AND cid = ? AND language = ? AND source = ?
+                """,
+                key,
+            )
+            connection.executemany(
+                """
+                INSERT INTO subtitle_cues (
+                    bvid, cid, language, source, cue_index,
+                    start_ms, end_ms, text
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        *key,
+                        cue.index,
+                        cue.start_ms,
+                        cue.end_ms,
+                        cue.text,
+                    )
+                    for cue in document.cues
+                ],
+            )
+
+    def load_subtitle_documents(
+        self,
+        bvid: str,
+        cid: str,
+        *,
+        fetched_after: datetime,
+    ) -> list[VideoSubtitleDocument]:
+        """读取仍在有效期内的字幕版本；损坏缓存作为存储错误处理。"""
+
+        self.initialize()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM subtitle_documents
+                WHERE bvid = ? AND cid = ? AND fetched_at >= ?
+                ORDER BY fetched_at DESC
+                """,
+                (bvid, cid, _iso(fetched_after)),
+            ).fetchall()
+            documents: list[VideoSubtitleDocument] = []
+            try:
+                for row in rows:
+                    cue_rows = connection.execute(
+                        """
+                        SELECT cue_index, start_ms, end_ms, text
+                        FROM subtitle_cues
+                        WHERE bvid = ? AND cid = ?
+                          AND language = ? AND source = ?
+                        ORDER BY cue_index
+                        """,
+                        (
+                            row["bvid"],
+                            row["cid"],
+                            row["language"],
+                            row["source"],
+                        ),
+                    ).fetchall()
+                    cues = [
+                        SubtitleCue(
+                            index=cue["cue_index"],
+                            start_ms=cue["start_ms"],
+                            end_ms=cue["end_ms"],
+                            text=cue["text"],
+                        )
+                        for cue in cue_rows
+                    ]
+                    if len(cues) != row["total_cues"]:
+                        raise ValueError("字幕 cue 数量与文档元数据不一致")
+                    documents.append(
+                        VideoSubtitleDocument(
+                            bvid=row["bvid"],
+                            cid=row["cid"],
+                            track=SubtitleTrack(
+                                language=row["language"],
+                                display_name=row["display_name"],
+                                source=row["source"],
+                            ),
+                            available_tracks=[
+                                SubtitleTrack.model_validate(item)
+                                for item in json.loads(
+                                    row["available_tracks_json"]
+                                )
+                            ],
+                            cues=cues,
+                            source_hash=row["source_hash"],
+                            fetched_at=row["fetched_at"],
+                        )
+                    )
+            except (TypeError, ValueError) as error:
+                raise ContentStorageError("字幕缓存格式不正确") from error
+        return documents
 
     def save_folders(self, folders: Sequence[FavoriteFolder]) -> None:
         self.initialize()

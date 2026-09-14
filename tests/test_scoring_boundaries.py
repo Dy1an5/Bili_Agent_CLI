@@ -44,7 +44,10 @@ def test_new_database_initializes_empty_scoring_tables(tmp_path) -> None:
 
     assert SCORING_TABLES <= table_names(store)
     with store.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == CONTENT_SCHEMA_VERSION
+        )
         for table in SCORING_TABLES:
             assert connection.execute(
                 f"SELECT count(*) FROM {table}"
@@ -123,7 +126,10 @@ def test_v2_database_migrates_to_persona_schema_without_losing_scores(
             "SELECT score, raw_score FROM topic_preference_scores"
         ).fetchone()
         assert tuple(row) == (42.0, 0.0)
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == CONTENT_SCHEMA_VERSION
+        )
 
 
 def test_scoring_models_define_boundaries_without_computing_scores() -> None:

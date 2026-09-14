@@ -26,6 +26,10 @@ from bili_agent_cli.schemas.following_users import (
 )
 from bili_agent_cli.schemas.history import HistoryQuery, HistoryResponse
 from bili_agent_cli.schemas.search import SearchVideoQuery, SearchVideoResponse
+from bili_agent_cli.schemas.subtitles import (
+    GetVideoSubtitleArgs,
+    VideoSubtitleResponse,
+)
 from bili_agent_cli.schemas.user_dynamics import (
     UserDynamicsArgs,
     UserDynamicsResponse,
@@ -41,6 +45,7 @@ from .result_models import (
     project_following_users,
     project_watch_history,
     project_search_videos,
+    project_video_subtitle,
     project_user_dynamics,
     project_watch_later,
 )
@@ -58,6 +63,7 @@ from .tools.bili.save_favorites import (
     prepare_save_videos_to_favorite_folder_tool,
 )
 from .tools.bili.search_videos import search_videos_tool
+from .tools.bili.get_video_subtitle import get_video_subtitle_tool
 from .tools.get_user_profile import get_user_profile_tool
 
 ToolExecutor = Callable[
@@ -146,6 +152,16 @@ async def _run_search_videos_tool(
         raise TypeError("search_videos_tool 收到了错误的参数模型")
 
     return await search_videos_tool(args)
+
+
+async def _run_get_video_subtitle_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
+    if not isinstance(args, GetVideoSubtitleArgs):
+        raise TypeError("get_video_subtitle_tool 收到了错误的参数模型")
+
+    return await get_video_subtitle_tool(args)
 
 
 async def _run_get_user_dynamics_tool(
@@ -266,6 +282,19 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         result_model=SearchVideoResponse,
         executor=_run_search_videos_tool,
         result_projector=project_search_videos,
+    ),
+    "get_video_subtitle": ToolDefinition(
+        name="get_video_subtitle",
+        description=(
+            "读取一个 Bilibili 视频具体分 P 的字幕。bvid 和 cid 应来自搜索、"
+            "收藏、稍后再看、历史或动态工具返回的视频身份；单 P 视频也需要 cid。"
+            "首次调用 offset=0；若 has_more=true，使用返回的 next_offset 继续，"
+            "并保持 bvid、cid、language 和 limit 不变。省略 language 时优先人工中文。"
+        ),
+        args_model=GetVideoSubtitleArgs,
+        result_model=VideoSubtitleResponse,
+        executor=_run_get_video_subtitle_tool,
+        result_projector=project_video_subtitle,
     ),
     "get_user_dynamics": ToolDefinition(
         name="get_user_dynamics",

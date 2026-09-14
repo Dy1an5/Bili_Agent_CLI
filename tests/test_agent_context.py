@@ -12,6 +12,10 @@ from bili_agent_cli.agent.context import (
     ContextSettings,
     FileSessionStore,
 )
+from bili_agent_cli.agent.context.manager import (
+    extract_pagination_state,
+    extract_sources,
+)
 from bili_agent_cli.agent.memory.models import (
     MemoryCandidate,
     MemoryDurability,
@@ -242,7 +246,7 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_usage_includes_summary_agent_and_memory_calls(self) -> None:
         manager = ContextManager(
             ContextSettings(
-                max_input_units=9_000,
+                max_input_units=11_000,
                 summarize_at_units=100,
                 recent_turns=1,
                 summary_max_tokens=100,
@@ -457,7 +461,7 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_agent_reports_compaction(self) -> None:
         manager = ContextManager(
             ContextSettings(
-                max_input_units=9_000,
+                max_input_units=11_000,
                 summarize_at_units=100,
                 recent_turns=1,
                 summary_max_tokens=100,
@@ -1251,6 +1255,78 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
             [source.source_id for source in second_context.trusted_sources],
             ["bilibili:video:BV1trusted"],
         )
+
+
+class SubtitleContextExtractionTest(unittest.TestCase):
+    def test_extracts_subtitle_video_source_and_next_offset(self) -> None:
+        result = {
+            "ok": True,
+            "data": {
+                "status": "available",
+                "bvid": "BV1subtitle",
+                "cid": "987",
+                "source_id": "bilibili:video:BV1subtitle",
+                "track": {
+                    "language": "zh-CN",
+                    "display_name": "中文",
+                    "source": "bilibili-human",
+                },
+                "cues": [
+                    {
+                        "index": 0,
+                        "start_ms": 0,
+                        "end_ms": 1000,
+                        "text": "字幕证据",
+                    }
+                ],
+                "total_cues": 2,
+                "offset": 0,
+                "limit": 1,
+                "has_more": True,
+                "next_offset": 1,
+            },
+        }
+
+        sources = extract_sources(result, "get_video_subtitle")
+        pagination = extract_pagination_state(
+            "get_video_subtitle",
+            {"bvid": "BV1subtitle", "cid": "987", "limit": 1},
+            result,
+        )
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].bvid, "BV1subtitle")
+        self.assertEqual(sources[0].cid, "987")
+        self.assertEqual(sources[0].source_id, "bilibili:video:BV1subtitle")
+        self.assertEqual(sources[0].source_tools, ["get_video_subtitle"])
+        self.assertIsNotNone(pagination)
+        assert pagination is not None
+        self.assertEqual(
+            pagination.next_arguments,
+            {
+                "bvid": "BV1subtitle",
+                "cid": "987",
+                "language": "zh-CN",
+                "offset": 1,
+                "limit": 1,
+                "refresh": False,
+            },
+        )
+
+    def test_unavailable_subtitle_is_not_a_citable_source(self) -> None:
+        result = {
+            "ok": True,
+            "data": {
+                "status": "unavailable",
+                "bvid": "BV1subtitle",
+                "cid": "987",
+                "source_id": "bilibili:video:BV1subtitle",
+                "has_more": False,
+                "next_offset": None,
+            },
+        }
+
+        self.assertEqual(extract_sources(result, "get_video_subtitle"), [])
 
 
 if __name__ == "__main__":

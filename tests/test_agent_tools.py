@@ -11,8 +11,11 @@ from bili_agent_cli.agent.registry import TOOL_REGISTRY, build_tool_schemas
 from bili_agent_cli.agent.result_models import (
     LlmFollowingUsersResult,
     LlmUserDynamicsResult,
+    LlmVideoSubtitleResult,
 )
 from bili_agent_cli.bilibili.following_users import FollowingUsersError
+from bili_agent_cli.bilibili.subtitles import VideoSubtitleError
+from bili_agent_cli.content.subtitles import VideoSubtitleStorageError
 from bili_agent_cli.bilibili.user_dynamics import UserDynamicsError
 from bili_agent_cli.schemas.favorites import (
     FavoriteFolder,
@@ -39,6 +42,13 @@ from bili_agent_cli.schemas.user_dynamics import (
     UserDynamicsResponse,
     UserDynamicStats,
 )
+from bili_agent_cli.schemas.subtitles import (
+    SubtitleCue,
+    SubtitleStatus,
+    SubtitleTrack,
+    SubtitleTrackSource,
+    VideoSubtitleResponse,
+)
 
 
 class AgentToolsTest(unittest.TestCase):
@@ -53,6 +63,7 @@ class AgentToolsTest(unittest.TestCase):
                 "get_watch_later",
                 "get_watch_history",
                 "search_videos",
+                "get_video_subtitle",
                 "get_user_dynamics",
                 "get_user_profile",
                 "prepare_save_videos_to_favorite_folder",
@@ -69,6 +80,15 @@ class AgentToolsTest(unittest.TestCase):
         self.assertEqual(folder_parameters["properties"], {})
         self.assertIn("folder_id", video_parameters["required"])
         self.assertIn("keyword", schemas["search_videos"]["parameters"]["required"])
+        subtitle_parameters = schemas["get_video_subtitle"]["parameters"]
+        self.assertFalse(subtitle_parameters["additionalProperties"])
+        self.assertEqual(subtitle_parameters["required"], ["bvid", "cid"])
+        self.assertEqual(subtitle_parameters["properties"]["offset"]["default"], 0)
+        self.assertEqual(subtitle_parameters["properties"]["limit"]["maximum"], 200)
+        self.assertIn(
+            "next_offset",
+            schemas["get_video_subtitle"]["description"],
+        )
         history_parameters = schemas["get_watch_history"]["parameters"]
         self.assertIn("max", history_parameters["properties"])
         self.assertIn("view_at", history_parameters["properties"])
@@ -405,6 +425,181 @@ class AgentToolsTest(unittest.TestCase):
         ):
             result = asyncio.run(execute_tool("get_following_users", {}))
 
+        self.assertEqual(
+            result,
+            {"ok": False, "error": "INVALID_LLM_TOOL_RESULT"},
+        )
+
+    @staticmethod
+    def _video_subtitle_response() -> VideoSubtitleResponse:
+        track = SubtitleTrack(
+            language="zh-CN",
+            display_name="中文",
+            source=SubtitleTrackSource.HUMAN,
+        )
+        return VideoSubtitleResponse(
+            status=SubtitleStatus.AVAILABLE,
+            bvid="BV1subtitle",
+            cid="987",
+            track=track,
+            available_tracks=[track],
+            cues=[
+                SubtitleCue(
+                    index=0,
+                    start_ms=1000,
+                    end_ms=2500,
+                    text="字幕内容",
+                )
+            ],
+            source_hash="sha256:" + "a" * 64,
+            total_cues=2,
+            offset=0,
+            limit=1,
+            has_more=True,
+            next_offset=1,
+            fetched_at="2026-09-14T04:00:00Z",
+            cached=True,
+        )
+
+    def test_executes_video_subtitle_tool_and_projects_compact_result(self) -> None:
+        response = self._video_subtitle_response()
+        with (
+            patch(
+                "bili_agent_cli.agent.tools.bili.get_video_subtitle.load_profile",
+                return_value={
+                    "SESSDATA": "test-value",
+                    "bili_jct": "unused-csrf",
+                    "DedeUserID": "123",
+                },
+            ),
+            patch(
+                "bili_agent_cli.agent.tools.bili.get_video_subtitle.get_video_subtitle",
+                new=AsyncMock(return_value=response),
+            ) as service_mock,
+        ):
+            result = asyncio.run(
+                execute_tool(
+                    "get_video_subtitle",
+                    {
+                        "bvid": "BV1subtitle",
+                        "cid": "987",
+                        "language": "zh-CN",
+                        "limit": 1,
+                    },
+                )
+            )
+
+        self.assertTrue(result["ok"])
+        args = service_mock.await_args.args[0]
+        self.assertEqual(args.bvid, "BV1subtitle")
+        self.assertEqual(args.cid, "987")
+        self.assertEqual(args.language, "zh-CN")
+        self.assertEqual(service_mock.await_args.args[1], "SESSDATA=test-value")
+        payload = result["data"]
+        self.assertEqual(payload["source_id"], "bilibili:video:BV1subtitle")
+        self.assertEqual(payload["cues"][0]["text"], "字幕内容")
+        self.assertEqual(payload["next_offset"], 1)
+        self.assertNotIn("cached", payload)
+        self.assertNotIn("fetched_at", payload)
+
+    def test_rejects_invalid_video_subtitle_arguments(self) -> None:
+        for arguments in (
+            {},
+            {"bvid": "BV1subtitle", "cid": "0"},
+            {"bvid": "BV1subtitle", "cid": "987", "limit": 201},
+            {"bvid": "BV1subtitle", "cid": "987", "extra": True},
+        ):
+            with self.subTest(arguments=arguments):
+                result = asyncio.run(
+                    execute_tool("get_video_subtitle", arguments)
+                )
+                self.assertEqual(
+                    result,
+                    {"ok": False, "error": "INVALID_TOOL_ARGUMENTS"},
+                )
+
+    def test_maps_video_subtitle_domain_error_to_stable_code(self) -> None:
+        with patch(
+            "bili_agent_cli.agent.registry.get_video_subtitle_tool",
+            new=AsyncMock(
+                side_effect=VideoSubtitleError(
+                    "sensitive upstream detail",
+                    status=503,
+                    code=-403,
+                )
+            ),
+        ):
+            result = asyncio.run(
+                execute_tool(
+                    "get_video_subtitle",
+                    {"bvid": "BV1subtitle", "cid": "987"},
+                )
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "ok": False,
+                "error": "VIDEO_SUBTITLE_FETCH_ERROR",
+                "details": {"upstream_code": -403, "http_status": 503},
+            },
+        )
+        self.assertNotIn("sensitive", str(result))
+
+        with patch(
+            "bili_agent_cli.agent.registry.get_video_subtitle_tool",
+            new=AsyncMock(
+                side_effect=VideoSubtitleStorageError("private path")
+            ),
+        ):
+            storage_result = asyncio.run(
+                execute_tool(
+                    "get_video_subtitle",
+                    {"bvid": "BV1subtitle", "cid": "987"},
+                )
+            )
+        self.assertEqual(
+            storage_result,
+            {"ok": False, "error": "VIDEO_SUBTITLE_STORAGE_ERROR"},
+        )
+        self.assertNotIn("private path", str(storage_result))
+
+    def test_rejects_invalid_video_subtitle_result_and_projection(self) -> None:
+        definition = TOOL_REGISTRY["get_video_subtitle"]
+        invalid_result = replace(
+            definition,
+            executor=AsyncMock(return_value={"status": "available"}),
+        )
+        with patch.dict(
+            TOOL_REGISTRY,
+            {"get_video_subtitle": invalid_result},
+        ):
+            result = asyncio.run(
+                execute_tool(
+                    "get_video_subtitle",
+                    {"bvid": "BV1subtitle", "cid": "987"},
+                )
+            )
+        self.assertEqual(result, {"ok": False, "error": "INVALID_TOOL_RESULT"})
+
+        def invalid_projector(result):
+            return LlmVideoSubtitleResult.model_validate({})
+
+        invalid_projection = replace(
+            definition,
+            executor=AsyncMock(return_value=self._video_subtitle_response()),
+            result_projector=invalid_projector,
+        )
+        with patch.dict(
+            TOOL_REGISTRY,
+            {"get_video_subtitle": invalid_projection},
+        ):
+            result = asyncio.run(
+                execute_tool(
+                    "get_video_subtitle",
+                    {"bvid": "BV1subtitle", "cid": "987"},
+                )
+            )
         self.assertEqual(
             result,
             {"ok": False, "error": "INVALID_LLM_TOOL_RESULT"},

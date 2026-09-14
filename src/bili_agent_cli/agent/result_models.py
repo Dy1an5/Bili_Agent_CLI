@@ -21,6 +21,13 @@ from bili_agent_cli.schemas.favorites import (
     FavoriteSaveStatus,
 )
 from bili_agent_cli.schemas.history import HistoryResponse
+from bili_agent_cli.schemas.subtitles import (
+    SubtitleCue,
+    SubtitleStatus,
+    SubtitleTrack,
+    SubtitleUnavailableReason,
+    VideoSubtitleResponse,
+)
 from bili_agent_cli.schemas.user_dynamics import UserDynamicStats
 
 
@@ -151,6 +158,27 @@ class LlmSearchVideoResult(BaseModel):
     page: int
     page_size: int
     has_more: bool
+
+
+class LlmVideoSubtitleResult(BaseModel):
+    status: SubtitleStatus
+    bvid: str
+    cid: str
+    track: SubtitleTrack | None
+    available_tracks: list[SubtitleTrack]
+    cues: list[SubtitleCue]
+    source_hash: str | None
+    total_cues: int
+    offset: int
+    limit: int
+    has_more: bool
+    next_offset: int | None
+    reason: SubtitleUnavailableReason | None
+
+    @computed_field
+    @property
+    def source_id(self) -> str:
+        return build_video_source_id(self.bvid)
 
 
 class LlmFollowingVideo(LlmSourceVideo):
@@ -403,6 +431,12 @@ def project_search_videos(result: BaseModel) -> BaseModel:
             }
         )
     return _project(result, LlmSearchVideoResult)
+
+
+def project_video_subtitle(result: BaseModel) -> BaseModel:
+    if not isinstance(result, VideoSubtitleResponse):
+        raise TypeError("project_video_subtitle 收到了错误的结果模型")
+    return _project(result, LlmVideoSubtitleResult)
 
 
 def project_following_feed(result: BaseModel) -> BaseModel:

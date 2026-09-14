@@ -9,8 +9,10 @@ from bili_agent_cli.agent.tool_errors import (
 from bili_agent_cli.bilibili.favorites import FavoriteWriteError
 from bili_agent_cli.bilibili.following_users import FollowingUsersError
 from bili_agent_cli.bilibili.user_dynamics import UserDynamicsError
+from bili_agent_cli.bilibili.subtitles import VideoSubtitleError
 from bili_agent_cli.profile import ProfileError
 from bili_agent_cli.persona.service import PersonaError
+from bili_agent_cli.content.subtitles import VideoSubtitleStorageError
 from .registry import TOOL_REGISTRY
 
 async def execute_tool(
@@ -65,6 +67,22 @@ async def execute_tool(
                 "upstream_message": str(error),
                 "http_status": error.status,
             },
+        }
+
+    except VideoSubtitleError as error:
+        return {
+            "ok": False,
+            "error": "VIDEO_SUBTITLE_FETCH_ERROR",
+            "details": {
+                "upstream_code": error.code,
+                "http_status": error.status,
+            },
+        }
+
+    except VideoSubtitleStorageError:
+        return {
+            "ok": False,
+            "error": "VIDEO_SUBTITLE_STORAGE_ERROR",
         }
 
     except UntrustedVideoSourcesError:

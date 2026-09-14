@@ -421,6 +421,11 @@ def extract_sources(
                 )
             )
 
+    if data.get("status") == "available":
+        source = _to_source(data, source_tool=source_tool)
+        if source is not None:
+            candidates.append(source)
+
     return merge_sources(candidates)
 
 
@@ -454,6 +459,7 @@ PAGED_TOOL_NAMES = {
     "get_watch_history",
     "search_videos",
     "get_user_dynamics",
+    "get_video_subtitle",
 }
 
 
@@ -504,6 +510,30 @@ def extract_pagination_state(
                     "max": next_max,
                     "view_at": next_view_at,
                 }
+        elif tool_name == "get_video_subtitle":
+            bvid = data.get("bvid")
+            cid = data.get("cid")
+            next_offset = data.get("next_offset")
+            limit = data.get("limit")
+            track = data.get("track")
+            language = track.get("language") if isinstance(track, dict) else None
+            if (
+                isinstance(bvid, str)
+                and isinstance(cid, str)
+                and isinstance(next_offset, int)
+                and not isinstance(next_offset, bool)
+                and isinstance(limit, int)
+                and not isinstance(limit, bool)
+            ):
+                next_arguments = {
+                    "bvid": bvid,
+                    "cid": cid,
+                    "offset": next_offset,
+                    "limit": limit,
+                    "refresh": False,
+                }
+                if isinstance(language, str) and language:
+                    next_arguments["language"] = language
         else:
             page = data.get("page")
             page_size = data.get("page_size")
