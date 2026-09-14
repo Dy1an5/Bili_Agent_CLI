@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -9,6 +10,7 @@ from bili_agent_cli.agent.memory.prompts import (
     MEMORY_EXTRACTION_SYSTEM_PROMPT,
     MEMORY_EXTRACTION_TOOL_NAME,
 )
+from bili_agent_cli.agent.models import TokenUsage
 
 from .config import (
     AGENT_MAX_OUTPUT_TOKENS,
@@ -27,11 +29,15 @@ from .models import (
     ChatResponse,
 )
 
+UsageCallback = Callable[[TokenUsage], None]
+
+
 def build_headers(api_key: str) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+
 
 def build_request_body(
     request: ChatRequest,
@@ -46,6 +52,42 @@ def build_request_body(
             }
         ],
     }
+
+
+def parse_provider_usage(payload: object) -> TokenUsage:
+    if not isinstance(payload, dict):
+        raise ProviderResponseError(
+            "供应商响应顶层不是对象"
+        )
+
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        raise ProviderResponseError(
+            "供应商响应缺少有效 usage"
+        )
+
+    try:
+        return TokenUsage.model_validate(
+            {
+                "input_tokens": usage.get("prompt_tokens"),
+                "output_tokens": usage.get("completion_tokens"),
+            }
+        )
+    except ValidationError as exc:
+        raise ProviderResponseError(
+            "供应商响应包含无效 usage"
+        ) from exc
+
+
+def _report_provider_usage(
+    payload: object,
+    on_usage: UsageCallback | None,
+) -> TokenUsage:
+    usage = parse_provider_usage(payload)
+    if on_usage is not None:
+        on_usage(usage)
+    return usage
+
 
 def parse_provider_payload(payload: object) -> ChatResponse:
     if not isinstance(payload, dict):
@@ -74,20 +116,12 @@ def parse_provider_payload(payload: object) -> ChatResponse:
             "供应商响应缺少有效 message"
         )
 
-    usage = payload.get("usage")
-
-    if not isinstance(usage, dict):
-        raise ProviderResponseError(
-            "供应商响应缺少有效 usage"
-        )
+    usage = parse_provider_usage(payload)
 
     local_data = {
         "answer": message.get("content"),
         "model": payload.get("model"),
-        "usage": {
-            "input_tokens": usage.get("prompt_tokens"),
-            "output_tokens": usage.get("completion_tokens"),
-        },
+        "usage": usage,
     }
 
     try:
@@ -97,6 +131,7 @@ def parse_provider_payload(payload: object) -> ChatResponse:
         raise ProviderResponseError(
             "供应商响应无法满足本地输出契约"
         ) from exc
+
 
 def parse_memory_extraction_message(message: object) -> MemoryExtraction:
     if not isinstance(message, dict):
@@ -125,8 +160,10 @@ def parse_memory_extraction_message(message: object) -> MemoryExtraction:
             "invalid memory extraction payload"
         ) from error
 
+
 async def create_memory_extraction(
     extraction_input: str,
+    on_usage: UsageCallback | None = None,
 ) -> MemoryExtraction:
     request_payload = {
         "model": DEEPSEEK_MODEL,
@@ -178,13 +215,22 @@ async def create_memory_extraction(
 
     try:
         payload = response.json()
+    except ValueError as error:
+        raise ProviderResponseError(
+            "invalid memory extraction response"
+        ) from error
+
+    _report_provider_usage(payload, on_usage)
+
+    try:
         message = payload["choices"][0]["message"]
-    except (ValueError, KeyError, IndexError, TypeError) as error:
+    except (KeyError, IndexError, TypeError) as error:
         raise ProviderResponseError(
             "invalid memory extraction response"
         ) from error
 
     return parse_memory_extraction_message(message)
+
 
 async def call_model_once(
     request: ChatRequest,
@@ -233,6 +279,7 @@ async def call_model_once(
 
     return parse_provider_payload(payload)
 
+
 async def create_agent_message(
     messages: list[
         dict[str, Any]
@@ -240,6 +287,7 @@ async def create_agent_message(
     tools: list[
         dict[str, object]
     ],
+    on_usage: UsageCallback | None = None,
 ) -> dict[str, Any]:
     api_key = load_api_key()
 
@@ -281,12 +329,19 @@ async def create_agent_message(
 
     try:
         payload = response.json()
+    except ValueError as exc:
+        raise ProviderResponseError(
+            "invalid provider response"
+        ) from exc
+
+    _report_provider_usage(payload, on_usage)
+
+    try:
         message = (
             payload["choices"][0]["message"]
         )
 
     except (
-        ValueError,
         KeyError,
         IndexError,
         TypeError,
@@ -308,9 +363,11 @@ SUMMARY_SYSTEM_PROMPT = """
 未完成事项、工具错误及不确定信息。禁止补充输入中没有的事实。
 """.strip()
 
+
 async def create_conversation_summary(
     summary_input: str,
     max_tokens: int,
+    on_usage: UsageCallback | None = None,
 ) -> str:
     payload = {
         "model": DEEPSEEK_MODEL,
@@ -348,8 +405,14 @@ async def create_conversation_summary(
 
     try:
         response_payload = response.json()
+    except ValueError as exc:
+        raise ProviderResponseError("invalid provider response") from exc
+
+    _report_provider_usage(response_payload, on_usage)
+
+    try:
         content = response_payload["choices"][0]["message"]["content"]
-    except (ValueError, KeyError, IndexError, TypeError) as exc:
+    except (KeyError, IndexError, TypeError) as exc:
         raise ProviderResponseError("invalid provider response") from exc
 
     if not isinstance(content, str) or not content.strip():

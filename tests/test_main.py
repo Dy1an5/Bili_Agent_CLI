@@ -15,7 +15,7 @@ from bili_agent_cli.agent.context import (
     ContextBudgetExceededError,
     SessionNotFoundError,
 )
-from bili_agent_cli.agent.models import AgentRunResponse, AgentSource
+from bili_agent_cli.agent.models import AgentRunResponse, AgentSource, TokenUsage
 from bili_agent_cli.schemas.favorites import (
     FavoriteFolder,
     FavoriteFolderListResponse,
@@ -100,6 +100,7 @@ class MainTest(unittest.TestCase):
         result = AgentRunResponse(
             answer="测试回答",
             session_id=session_id,
+            usage=TokenUsage(input_tokens=123, output_tokens=45),
             sources=[
                 AgentSource(
                     bvid="BV1source",
@@ -122,6 +123,7 @@ class MainTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["answer"], "测试回答")
+        self.assertNotIn("usage", response.json())
         self.assertEqual(response.json()["session_id"], str(session_id))
         self.assertEqual(
             response.json()["memory"],

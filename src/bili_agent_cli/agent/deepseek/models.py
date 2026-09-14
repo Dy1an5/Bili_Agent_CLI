@@ -3,9 +3,10 @@ from typing import Annotated
 from pydantic import (
     BaseModel,
     ConfigDict,
-    Field,
     StringConstraints,
 )
+
+from bili_agent_cli.agent.models import TokenUsage
 
 NonEmptyString = Annotated[
     str,
@@ -21,11 +22,6 @@ class ChatRequest(BaseModel):
 
     message: NonEmptyString
 
-class TokenUsage(BaseModel):
-    model_config = ConfigDict(strict=True)
-
-    input_tokens: int = Field(ge=0)
-    output_tokens: int = Field(ge=0)
 
 class ChatResponse(BaseModel):
     model_config = ConfigDict(strict=True)

@@ -12,6 +12,7 @@ from bili_agent_cli.agent.deepseek.model_client import (
     create_memory_extraction,
     parse_memory_extraction_message,
 )
+from bili_agent_cli.agent.models import TokenUsage
 from bili_agent_cli.agent.memory.models import MemoryCandidate
 from bili_agent_cli.agent.memory.prompts import (
     MEMORY_EXTRACTION_SYSTEM_PROMPT,
@@ -165,7 +166,13 @@ class MemoryExtractionRequestTest(unittest.TestCase):
         provider_message = extraction_message({"candidates": []})
         response = httpx.Response(
             200,
-            json={"choices": [{"message": provider_message}]},
+            json={
+                "choices": [{"message": provider_message}],
+                "usage": {
+                    "prompt_tokens": 123,
+                    "completion_tokens": 45,
+                },
+            },
         )
         client = AsyncMock()
         client.__aenter__.return_value = client
@@ -182,9 +189,19 @@ class MemoryExtractionRequestTest(unittest.TestCase):
                 return_value="test-key",
             ),
         ):
-            result = asyncio.run(create_memory_extraction("提取输入"))
+            reported_usage = []
+            result = asyncio.run(
+                create_memory_extraction(
+                    "提取输入",
+                    on_usage=reported_usage.append,
+                )
+            )
 
         self.assertEqual(result.candidates, [])
+        self.assertEqual(
+            reported_usage,
+            [TokenUsage(input_tokens=123, output_tokens=45)],
+        )
         request = client.post.await_args
         self.assertEqual(request.args[0], "https://api.deepseek.com/chat/completions")
         self.assertEqual(

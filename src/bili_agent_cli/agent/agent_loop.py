@@ -50,6 +50,7 @@ from .models import (
     AgentRunResponse,
     AgentSource,
     AgentStep,
+    TokenUsage,
 )
 from .registry import SUBMIT_AGENT_ANSWER_TOOL_NAME, build_tool_schemas
 
@@ -154,6 +155,20 @@ async def run_agent(
     )
 
     async with session.lock:
+        total_input_tokens = 0
+        total_output_tokens = 0
+
+        def record_usage(usage: TokenUsage) -> None:
+            nonlocal total_input_tokens, total_output_tokens
+            total_input_tokens += usage.input_tokens
+            total_output_tokens += usage.output_tokens
+
+        def current_usage() -> TokenUsage:
+            return TokenUsage(
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+            )
+
         if session.pending_turn is not None:
             previous_pending = session.pending_turn
             previous_pending.status = "interrupted"
@@ -187,12 +202,23 @@ async def run_agent(
             )
 
         tools = build_tool_schemas()
+
+        async def summarize_with_usage(
+            summary_input: str,
+            max_tokens: int,
+        ) -> str:
+            return await create_conversation_summary(
+                summary_input,
+                max_tokens,
+                on_usage=record_usage,
+            )
+
         context_compacted = await context_manager.compact_session_if_needed(
             system_prompt=run_system_prompt,
             session=session,
             task=task,
             tools=tools,
-            summarize=create_conversation_summary,
+            summarize=summarize_with_usage,
         )
         if context_compacted:
             session.updated_at = datetime.now(timezone.utc)
@@ -244,11 +270,13 @@ async def run_agent(
                     sources=final_sources,
                     trace=trace,
                     memory=memory_result,
+                    usage=current_usage(),
                 )
 
             try:
                 extraction = await create_memory_extraction(
-                    pending_turn.user_content
+                    pending_turn.user_content,
+                    on_usage=record_usage,
                 )
             except ModelCallError as error:
                 error_code = _memory_error_code(error)
@@ -298,6 +326,7 @@ async def run_agent(
                 sources=final_sources,
                 trace=trace,
                 memory=memory_result,
+                usage=current_usage(),
             )
 
         async def mark_turn_interrupted(error_code: str) -> None:
@@ -321,6 +350,7 @@ async def run_agent(
                 assistant_message = await create_agent_message(
                     messages=messages,
                     tools=tools,
+                    on_usage=record_usage,
                 )
             except Exception as exc:
                 await mark_turn_interrupted(exc.__class__.__name__)
@@ -525,6 +555,7 @@ async def run_agent(
             context_compacted=context_compacted,
             sources=[],
             trace=trace,
+            usage=current_usage(),
         )
 
 

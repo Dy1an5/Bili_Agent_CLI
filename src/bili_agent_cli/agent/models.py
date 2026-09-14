@@ -105,6 +105,13 @@ class AgentMemoryResult(BaseModel):
     error_code: str | None = None
 
 
+class TokenUsage(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+
+
 class AgentRunResponse(BaseModel):
     answer: str
     session_id: UUID
@@ -112,3 +119,10 @@ class AgentRunResponse(BaseModel):
     sources: list[AgentSource] = Field(default_factory=list)
     trace: list[AgentStep] = Field(default_factory=list)
     memory: AgentMemoryResult = Field(default_factory=AgentMemoryResult)
+    usage: TokenUsage = Field(
+        default_factory=lambda: TokenUsage(
+            input_tokens=0,
+            output_tokens=0,
+        ),
+        exclude=True,
+    )

@@ -138,6 +138,11 @@ async def run(arguments: argparse.Namespace) -> None:
         session_id = response.session_id
         print(f"助手> {response.answer}")
         _print_memory_result(response.memory)
+        print(
+            "Token> "
+            f"input_tokens={response.usage.input_tokens}, "
+            f"output_tokens={response.usage.output_tokens}"
+        )
 
 
 def _print_memory_result(result: AgentMemoryResult) -> None:

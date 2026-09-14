@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 from bili_agent_cli.agent.agent_loop import run_agent
 from bili_agent_cli.agent.context import (
@@ -23,7 +23,7 @@ from bili_agent_cli.agent.memory.store import (
     MemoryStorageError,
     MemoryStore,
 )
-from bili_agent_cli.agent.models import AgentMemoryStatus
+from bili_agent_cli.agent.models import AgentMemoryStatus, TokenUsage
 from bili_agent_cli.agent.deepseek.errors import ProviderTimeoutError
 
 
@@ -167,7 +167,149 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
             f"session:{session.id}:turn:{completed_turn.id}",
         )
 
-        self.memory_extraction.assert_awaited_once_with("以后回答保持简短")
+        self.memory_extraction.assert_awaited_once_with(
+            "以后回答保持简短",
+            on_usage=ANY,
+        )
+
+    async def test_usage_sums_model_responses_not_parallel_tool_calls(self) -> None:
+        responses = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "search-call",
+                        "function": {
+                            "name": "search_videos",
+                            "arguments": '{"keyword":"F1"}',
+                        },
+                    },
+                    {
+                        "id": "later-call",
+                        "function": {
+                            "name": "get_watch_later",
+                            "arguments": "{}",
+                        },
+                    },
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "submit-call",
+                        "function": {
+                            "name": "submit_agent_answer",
+                            "arguments": json.dumps(
+                                {"answer": "完成", "source_ids": []}
+                            ),
+                        },
+                    }
+                ],
+            },
+        ]
+        usages = iter(
+            [
+                TokenUsage(input_tokens=10, output_tokens=2),
+                TokenUsage(input_tokens=20, output_tokens=3),
+            ]
+        )
+
+        async def create_message(*, messages, tools, on_usage=None):
+            del messages, tools
+            on_usage(next(usages))
+            return responses.pop(0)
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.execute_tool",
+                new=AsyncMock(return_value={"ok": True, "data": {}}),
+            ),
+        ):
+            response = await run_agent("搜索 F1")
+
+        self.assertEqual(
+            response.usage,
+            TokenUsage(input_tokens=30, output_tokens=5),
+        )
+
+    async def test_usage_includes_summary_agent_and_memory_calls(self) -> None:
+        manager = ContextManager(
+            ContextSettings(
+                max_input_units=9_000,
+                summarize_at_units=100,
+                recent_turns=1,
+                summary_max_tokens=100,
+                max_tool_result_units=1_000,
+            )
+        )
+
+        async def create_message(*, messages, tools, on_usage=None):
+            del messages, tools
+            on_usage(TokenUsage(input_tokens=5, output_tokens=1))
+            return {"role": "assistant", "content": "回答" * 40}
+
+        async def summarize(summary_input, max_tokens, on_usage=None):
+            del summary_input, max_tokens
+            on_usage(TokenUsage(input_tokens=11, output_tokens=2))
+            return "历史摘要"
+
+        async def extract(extraction_input, on_usage=None):
+            del extraction_input
+            on_usage(TokenUsage(input_tokens=13, output_tokens=3))
+            return MemoryExtraction(candidates=[])
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.context_manager",
+                new=manager,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_conversation_summary",
+                new=summarize,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_memory_extraction",
+                new=extract,
+            ),
+        ):
+            first = await run_agent("第一轮" * 20)
+            await run_agent("第二轮" * 20, first.session_id)
+            third = await run_agent("以后回答保持简短", first.session_id)
+
+        self.assertTrue(third.context_compacted)
+        self.assertEqual(
+            third.usage,
+            TokenUsage(input_tokens=29, output_tokens=6),
+        )
+
+    async def test_usage_only_counts_agent_when_no_auxiliary_call_runs(self) -> None:
+        async def create_message(*, messages, tools, on_usage=None):
+            del messages, tools
+            on_usage(TokenUsage(input_tokens=7, output_tokens=4))
+            return {"role": "assistant", "content": "普通回答"}
+
+        with patch(
+            "bili_agent_cli.agent.agent_loop.create_agent_message",
+            new=create_message,
+        ):
+            response = await run_agent("今天天气不错")
+
+        self.assertEqual(
+            response.usage,
+            TokenUsage(input_tokens=7, output_tokens=4),
+        )
+        self.memory_extraction.assert_not_awaited()
 
     async def test_extraction_failure_keeps_completed_answer(self) -> None:
         self.memory_extraction.side_effect = ProviderTimeoutError(

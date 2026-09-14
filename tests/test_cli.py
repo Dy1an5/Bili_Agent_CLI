@@ -15,6 +15,7 @@ from bili_agent_cli.agent.models import (
     AgentMemoryResult,
     AgentMemoryStatus,
     AgentRunResponse,
+    TokenUsage,
 )
 from bili_agent_cli.agent.context import (
     AgentEvidenceBatch,
@@ -127,6 +128,34 @@ class AgentCliTest(unittest.TestCase):
             asyncio.run(run_agent_chat(argparse.Namespace()))
 
         self.assertIn("记忆> 已更新长期记忆：新增 1 条。", output.getvalue())
+
+    def test_chat_prints_one_usage_line_after_successful_turn(self) -> None:
+        session_id = uuid4()
+        model = AsyncMock(
+            return_value=AgentRunResponse(
+                answer="已经处理",
+                session_id=session_id,
+                usage=TokenUsage(input_tokens=123, output_tokens=45),
+            )
+        )
+        output = StringIO()
+
+        with (
+            patch(
+                "bili_agent_cli.cli.agent._read_task",
+                new=AsyncMock(side_effect=["处理任务", "/exit"]),
+            ),
+            patch("bili_agent_cli.cli.agent.run_agent", new=model),
+            patch("sys.stdout", output),
+        ):
+            asyncio.run(run_agent_chat(argparse.Namespace()))
+
+        usage_line = "Token> input_tokens=123, output_tokens=45"
+        self.assertEqual(output.getvalue().count(usage_line), 1)
+        self.assertLess(
+            output.getvalue().index("助手> 已经处理"),
+            output.getvalue().index(usage_line),
+        )
 
     def test_chat_reports_memory_extraction_failure(self) -> None:
         session_id = uuid4()
