@@ -5,3 +5,32 @@ __pycache__/
 secret/
 docs/*
 !docs/memory.md
+
+# Environment variables and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+cookies*.txt
+
+# Local runtime data
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
+*.log
+
+# Test, editor, and build artifacts
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/
+dist/
+build/
+*.egg-info/

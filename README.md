@@ -170,7 +170,7 @@ curl http://127.0.0.1:8000/api/favorites/folders
 分页获取指定收藏夹中的视频：
 
 ```bash
-curl --get http://127.0.0.1:8000/api/favorites/folders/167862349/videos \
+curl --get http://127.0.0.1:8000/api/favorites/folders/收藏夹ID/videos \
     --data-urlencode 'page=1' \
     --data-urlencode 'page_size=20'
 ```
