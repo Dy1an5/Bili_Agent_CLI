@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import BaseModel, PlainSerializer, computed_field
 
@@ -12,6 +13,10 @@ from bili_agent_cli.schemas.following_feed import (
     FollowingVideoStats,
 )
 from bili_agent_cli.schemas.following_users import FollowingOfficialVerification
+from bili_agent_cli.schemas.favorites import (
+    FavoriteFolderPrivacy,
+    FavoriteSaveStatus,
+)
 from bili_agent_cli.schemas.history import HistoryResponse
 from bili_agent_cli.schemas.user_dynamics import UserDynamicStats
 
@@ -82,6 +87,39 @@ class LlmFavoriteFolderVideosResult(BaseModel):
     page: int
     page_size: int
     has_more: bool
+
+
+class LlmFavoriteSaveVideo(LlmSourceVideo):
+    aid: str
+    title: str | None
+
+
+class LlmFavoriteSavePreviewResult(BaseModel):
+    confirmation_id: UUID
+    expires_at: BeijingTime
+    folder_title: str
+    existing_folder_id: str | None
+    will_create_folder: bool
+    privacy: FavoriteFolderPrivacy
+    videos: list[LlmFavoriteSaveVideo]
+
+
+class LlmFavoriteSaveTargetFolder(BaseModel):
+    id: str
+    title: str
+    created: bool
+
+
+class LlmFavoriteSaveResult(BaseModel):
+    status: FavoriteSaveStatus
+    folder: LlmFavoriteSaveTargetFolder
+    videos: list[LlmFavoriteSaveVideo]
+    retry_videos: list[LlmFavoriteSaveVideo]
+    requested_count: int
+    added_count: int | None
+    upstream_code: int | None
+    upstream_message: str | None
+    retryable: bool
 
 
 class LlmWatchLaterVideo(LlmSourceVideo):
@@ -213,6 +251,8 @@ class LlmUserDynamicsResult(BaseModel):
     total_count: int
     skipped_count: int
     pages_fetched: int
+    has_more: bool
+    next_offset: str | None
 
 
 def _project(result: BaseModel, model: type[BaseModel]) -> BaseModel:
@@ -225,6 +265,14 @@ def project_favorite_folders(result: BaseModel) -> BaseModel:
 
 def project_favorite_folder_videos(result: BaseModel) -> BaseModel:
     return _project(result, LlmFavoriteFolderVideosResult)
+
+
+def project_favorite_save_preview(result: BaseModel) -> BaseModel:
+    return _project(result, LlmFavoriteSavePreviewResult)
+
+
+def project_favorite_save(result: BaseModel) -> BaseModel:
+    return _project(result, LlmFavoriteSaveResult)
 
 
 def project_watch_later(result: BaseModel) -> BaseModel:

@@ -1,5 +1,12 @@
 from pydantic import ValidationError
 
+from bili_agent_cli.agent.tool_context import ToolExecutionContext
+from bili_agent_cli.agent.tool_errors import (
+    FavoriteConfirmationError,
+    FavoriteConfirmationSameTurnError,
+    UntrustedVideoSourcesError,
+)
+from bili_agent_cli.bilibili.favorites import FavoriteWriteError
 from bili_agent_cli.bilibili.following_users import FollowingUsersError
 from bili_agent_cli.bilibili.user_dynamics import UserDynamicsError
 from bili_agent_cli.profile import ProfileError
@@ -7,7 +14,8 @@ from .registry import TOOL_REGISTRY
 
 async def execute_tool(
     tool_name: str,
-    raw_arguments: object
+    raw_arguments: object,
+    context: ToolExecutionContext | None = None,
 ) -> dict[str, object]:
     definition = TOOL_REGISTRY.get(tool_name)
 
@@ -27,7 +35,7 @@ async def execute_tool(
         }
 
     try:
-        raw_result = await definition.executor(args)
+        raw_result = await definition.executor(args, context)
 
     except ProfileError:
         return {
@@ -41,10 +49,45 @@ async def execute_tool(
             "error": "FOLLOWING_USERS_FETCH_ERROR",
         }
 
-    except UserDynamicsError:
+    except UserDynamicsError as error:
         return {
             "ok": False,
             "error": "USER_DYNAMICS_FETCH_ERROR",
+            "details": {
+                "upstream_code": error.code,
+                "upstream_message": str(error),
+                "http_status": error.status,
+            },
+        }
+
+    except UntrustedVideoSourcesError:
+        return {
+            "ok": False,
+            "error": "UNTRUSTED_VIDEO_SOURCES",
+        }
+
+    except FavoriteConfirmationSameTurnError:
+        return {
+            "ok": False,
+            "error": "FAVORITE_CONFIRMATION_REQUIRES_NEW_TURN",
+        }
+
+    except FavoriteConfirmationError:
+        return {
+            "ok": False,
+            "error": "INVALID_OR_EXPIRED_FAVORITE_CONFIRMATION",
+        }
+
+    except FavoriteWriteError as error:
+        return {
+            "ok": False,
+            "error": "FAVORITE_SAVE_ERROR",
+            "details": {
+                "upstream_code": error.code,
+                "upstream_message": str(error),
+                "http_status": error.status,
+                "outcome_unknown": error.outcome_unknown,
+            },
         }
 
     except Exception:

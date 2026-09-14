@@ -17,6 +17,13 @@ class UserDynamicsArgs(BaseModel):
             "get_following_users 返回的 mid。"
         ),
     )
+    offset: str = Field(
+        default="",
+        max_length=1000,
+        description=(
+            "分页游标。第一页留空；继续读取时使用上一页返回的 next_offset。"
+        ),
+    )
 
 
 class UserDynamicAuthor(BaseModel):
@@ -60,3 +67,5 @@ class UserDynamicsResponse(BaseModel):
     total_count: int = Field(ge=0)
     skipped_count: int = Field(ge=0)
     pages_fetched: int = Field(ge=1)
+    has_more: bool = False
+    next_offset: str | None = None

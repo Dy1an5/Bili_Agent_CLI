@@ -2,23 +2,29 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, Query, status
+from fastapi import APIRouter, HTTPException, Path, Query, Response, status
 
 from bili_agent_cli.bilibili.favorites import (
     FavoritesError,
     fetch_favorite_folder_videos,
     fetch_favorite_folders,
+    save_videos_to_favorite_folder,
 )
 from bili_agent_cli.profile import (
     ProfileError,
+    get_csrf_token,
     get_sessdata_cookie_header,
     get_user_id,
+    get_write_cookie_header,
     load_profile,
 )
 from bili_agent_cli.schemas.favorites import (
     FavoriteFolderListResponse,
     FavoriteFolderVideosResponse,
+    FavoriteSaveResponse,
+    FavoriteSaveStatus,
     FavoriteVideosQuery,
+    SaveVideosToFavoriteFolderRequest,
 )
 
 
@@ -60,6 +66,39 @@ async def get_favorite_folder_videos(
             query,
             get_sessdata_cookie_header(cookies),
         )
+    except ProfileError as error:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(error),
+        ) from error
+    except FavoritesError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+
+
+@router.post(
+    "/folders/save-videos",
+    response_model=FavoriteSaveResponse,
+    responses={207: {"model": FavoriteSaveResponse}},
+)
+async def save_favorite_videos(
+    request: SaveVideosToFavoriteFolderRequest,
+    response: Response,
+) -> FavoriteSaveResponse:
+    try:
+        cookies = load_profile()
+        result = await save_videos_to_favorite_folder(
+            request,
+            get_user_id(cookies),
+            get_sessdata_cookie_header(cookies),
+            get_write_cookie_header(cookies),
+            get_csrf_token(cookies),
+        )
+        if result.status is not FavoriteSaveStatus.COMPLETED:
+            response.status_code = status.HTTP_207_MULTI_STATUS
+        return result
     except ProfileError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

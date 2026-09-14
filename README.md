@@ -133,13 +133,20 @@ curl --get http://127.0.0.1:8000/api/following/feed \
 
 FastAPI 会把 B站的异构动态响应转换为最小视频列表模型，只返回视频动态。输出包含动态 ID、UP主、视频和下一页信息。动态接口没有提供 `cid` 时返回 `null`，进入视频详情后再通过 `bvid` 补齐。
 
-获取指定 UP 主的全部动态：
+获取指定 UP 主的第一页动态：
 
 ```bash
 curl http://127.0.0.1:8000/api/users/指定UP主MID/dynamics
 ```
 
-该接口使用 WBI 签名并自动读取所有上游分页，返回视频、图文、转发等所有可解析的动态类型。响应中的 `pages_fetched` 是请求的上游页数，`skipped_count` 是缺少动态 ID 或模块结构而无法解析的记录数。此读取操作不使用 CSRF，只会发送登录资料中的 `SESSDATA`。
+继续读取时传入上一页返回的 `next_offset`：
+
+```bash
+curl --get http://127.0.0.1:8000/api/users/指定UP主MID/dynamics \
+    --data-urlencode 'offset=上一页的next_offset'
+```
+
+该接口使用 WBI 签名，每次只读取一个上游分页，返回视频、图文、转发等可解析的动态类型。响应中的 `has_more` 和 `next_offset` 用于继续分页，`pages_fetched` 固定为 `1`，`skipped_count` 是当前页缺少动态 ID 或模块结构而无法解析的记录数。Agent 会保存下一页参数：用户只要最新内容时停在当前页，明确要求“更多”或“全部”时再由模型决定继续调用。此读取操作不使用 CSRF，只会发送登录资料中的 `SESSDATA`。
 
 分页获取当前账号关注的 UP 主：
 
@@ -169,6 +176,22 @@ curl --get http://127.0.0.1:8000/api/favorites/folders/167862349/videos \
 ```
 
 收藏夹视频响应同时包含 `folder` 和 `videos`；每个视频也带有 `folder_id`，用于明确收藏夹与视频的归属关系。
+
+把视频加入指定收藏夹；名称精确匹配的收藏夹不存在时会先创建：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/favorites/folders/save-videos \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "folder_title": "UP 主动态",
+      "bvids": ["BV1xx411c7mD"],
+      "privacy": "private"
+    }'
+```
+
+`privacy` 只在新建收藏夹时生效，可取 `private`（默认）或 `public`。写操作会先解析并校验全部 BVID，再逐条调用收藏接口；每尝试写入 5 个视频固定暂停 2 秒。遇到 B站限频码 `-702` 时，当前视频会按 3、6、12 秒退避重试；仍失败则停止本次写入，将当前及剩余视频交给确认计划的后续重试。请求使用登录 Cookie 中的 `SESSDATA`、`bili_jct` 和 CSRF 表单字段，并通过 `added_count` 和 `retry_videos` 区分已确认成功与待重试的视频。若新建收藏夹成功但添加视频失败，收藏夹会保留，接口返回 HTTP 207 和 `status=partial`；网络中断等无法确认上游是否完成时返回 HTTP 207 和 `status=outcome_unknown`。失败响应中的 `upstream_code` 和 `upstream_message` 保留 B站业务错误，调用方应据此核对收藏夹后再决定是否重试。
+
+Agent 写入使用两个工具以隔离确认步骤：`prepare_save_videos_to_favorite_folder` 只接受当前会话中读取工具真实返回的 `source_id`，完成预检后返回 30 分钟有效的 `confirmation_id`；Agent 必须展示目标收藏夹、视频列表和是否新建，并结束当前回答。只有用户在下一轮明确确认后，才能调用 `commit_save_videos_to_favorite_folder`。确认 ID 绑定预检计划，不能修改目标或视频，完整成功后即失效；若返回 `retryable=true`，用户下一轮要求重试时可以沿用该 ID，程序只重试尚未确认成功的视频。同一用户轮次中的提交仍会被拒绝。
 
 ## 获取稍后再看
 

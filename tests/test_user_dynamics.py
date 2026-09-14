@@ -9,6 +9,7 @@ import httpx
 from bili_agent_cli.bilibili.user_dynamics import (
     UserDynamicsError,
     fetch_all_user_dynamics,
+    fetch_user_dynamics_page,
 )
 from bili_agent_cli.main import app
 from bili_agent_cli.profile import ProfileError
@@ -96,6 +97,48 @@ def _opus_dynamic(dynamic_id: str = "102") -> dict[str, object]:
 
 
 class UserDynamicsClientTest(unittest.TestCase):
+    def test_fetches_exactly_one_page_and_returns_next_offset(self) -> None:
+        requested_offsets: list[str] = []
+
+        async def run_scenario():
+            def handle_request(request: httpx.Request) -> httpx.Response:
+                if request.url.path == "/x/web-interface/nav":
+                    return httpx.Response(200, json=NAV_PAYLOAD)
+                self.assertEqual(
+                    request.url.path,
+                    "/x/polymer/web-dynamic/v1/feed/space",
+                )
+                requested_offsets.append(request.url.params["offset"])
+                return httpx.Response(
+                    200,
+                    json={
+                        "code": 0,
+                        "data": {
+                            "items": [_video_dynamic()],
+                            "has_more": True,
+                            "offset": "next-cursor",
+                        },
+                    },
+                )
+
+            async with httpx.AsyncClient(
+                transport=httpx.MockTransport(handle_request)
+            ) as client:
+                return await fetch_user_dynamics_page(
+                    "456",
+                    "current-cursor",
+                    "SESSDATA=test",
+                    client,
+                )
+
+        response = asyncio.run(run_scenario())
+
+        self.assertEqual(requested_offsets, ["current-cursor"])
+        self.assertEqual(response.pages_fetched, 1)
+        self.assertTrue(response.has_more)
+        self.assertEqual(response.next_offset, "next-cursor")
+        self.assertEqual(response.total_count, 1)
+
     def test_fetches_all_pages_with_wbi_and_parses_dynamic_types(self) -> None:
         forwarded = {
             "id_str": "103",
@@ -355,15 +398,23 @@ class UserDynamicsRouteTest(unittest.TestCase):
                 return_value={"SESSDATA": "test", "DedeUserID": "123"},
             ),
             patch(
-                "bili_agent_cli.routes.user_dynamics.fetch_all_user_dynamics",
+                "bili_agent_cli.routes.user_dynamics.fetch_user_dynamics_page",
                 new=AsyncMock(return_value=parsed_response),
             ) as fetch_mock,
         ):
-            response = asyncio.run(self._request("/api/users/456/dynamics"))
+            response = asyncio.run(
+                self._request(
+                    "/api/users/456/dynamics?offset=current-cursor"
+                )
+            )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), parsed_response.model_dump(mode="json"))
-        fetch_mock.assert_awaited_once_with("456", "SESSDATA=test")
+        fetch_mock.assert_awaited_once_with(
+            "456",
+            "current-cursor",
+            "SESSDATA=test",
+        )
 
     def test_route_validates_mid_and_maps_errors(self) -> None:
         invalid = asyncio.run(self._request("/api/users/0/dynamics"))
@@ -380,7 +431,7 @@ class UserDynamicsRouteTest(unittest.TestCase):
                 return_value={"SESSDATA": "test"},
             ),
             patch(
-                "bili_agent_cli.routes.user_dynamics.fetch_all_user_dynamics",
+                "bili_agent_cli.routes.user_dynamics.fetch_user_dynamics_page",
                 new=AsyncMock(side_effect=UserDynamicsError("上游错误")),
             ),
         ):

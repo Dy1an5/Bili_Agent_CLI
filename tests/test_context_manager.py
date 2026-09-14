@@ -286,6 +286,26 @@ class ContextManagerTest(unittest.IsolatedAsyncioTestCase):
             {"page": 3, "page_size": 20, "sort": "frequent"},
         )
 
+    def test_extracts_user_dynamics_next_offset_with_user_mid(self) -> None:
+        state = extract_pagination_state(
+            "get_user_dynamics",
+            {"user_mid": "456", "offset": ""},
+            {
+                "ok": True,
+                "data": {
+                    "user_mid": "456",
+                    "has_more": True,
+                    "next_offset": "opaque-cursor",
+                },
+            },
+        )
+
+        self.assertIsNotNone(state)
+        self.assertEqual(
+            state.next_arguments,
+            {"offset": "opaque-cursor", "user_mid": "456"},
+        )
+
     def test_extracts_next_page_arguments(self) -> None:
         state = extract_pagination_state(
             "search_videos",

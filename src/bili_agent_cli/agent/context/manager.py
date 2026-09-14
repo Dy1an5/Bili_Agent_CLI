@@ -431,6 +431,7 @@ PAGED_TOOL_NAMES = {
     "get_watch_later",
     "get_watch_history",
     "search_videos",
+    "get_user_dynamics",
 }
 
 
@@ -454,10 +455,16 @@ def extract_pagination_state(
     next_arguments: dict[str, str | int | float | bool | None] | None = None
 
     if has_more:
-        if tool_name == "get_following_feed":
+        if tool_name in {"get_following_feed", "get_user_dynamics"}:
             next_offset = data.get("next_offset")
             if isinstance(next_offset, str) and next_offset:
                 next_arguments = {"offset": next_offset}
+                if tool_name == "get_user_dynamics":
+                    user_mid = data.get("user_mid")
+                    if isinstance(user_mid, str) and user_mid:
+                        next_arguments["user_mid"] = user_mid
+                    else:
+                        next_arguments = None
         elif tool_name == "get_watch_history":
             next_max = data.get("next_max")
             next_view_at = data.get("next_view_at")

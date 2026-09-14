@@ -9,8 +9,10 @@ from unittest.mock import patch
 import bili_agent_cli.profile as profile_module
 from bili_agent_cli.profile import (
     ProfileError,
+    get_csrf_token,
     get_sessdata_cookie_header,
     get_user_id,
+    get_write_cookie_header,
     load_profile,
     parse_cookie_header,
     save_profile,
@@ -47,6 +49,26 @@ class ProfileTest(unittest.TestCase):
         )
 
         self.assertEqual(cookie_header, "SESSDATA=session-value")
+
+    def test_get_write_auth_uses_sessdata_and_csrf(self) -> None:
+        cookies = {
+            "SESSDATA": "session-value",
+            "bili_jct": "csrf-value",
+            "DedeUserID": "123",
+        }
+
+        self.assertEqual(get_csrf_token(cookies), "csrf-value")
+        self.assertEqual(
+            get_write_cookie_header(cookies),
+            "SESSDATA=session-value; bili_jct=csrf-value",
+        )
+
+    def test_get_write_auth_rejects_missing_required_values(self) -> None:
+        with self.assertRaises(ProfileError):
+            get_csrf_token({"SESSDATA": "session-value"})
+
+        with self.assertRaises(ProfileError):
+            get_write_cookie_header({"bili_jct": "csrf-value"})
 
     def test_get_user_id(self) -> None:
         self.assertEqual(get_user_id({"DedeUserID": "123"}), "123")

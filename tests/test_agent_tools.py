@@ -54,6 +54,8 @@ class AgentToolsTest(unittest.TestCase):
                 "get_watch_history",
                 "search_videos",
                 "get_user_dynamics",
+                "prepare_save_videos_to_favorite_folder",
+                "commit_save_videos_to_favorite_folder",
             },
         )
 
@@ -96,9 +98,29 @@ class AgentToolsTest(unittest.TestCase):
             dynamics_parameters["properties"]["user_mid"]["description"],
         )
         self.assertIn(
-            "自动遍历所有上游 offset 分页",
+            "next_offset",
             schemas["get_user_dynamics"]["description"],
         )
+        self.assertEqual(
+            dynamics_parameters["properties"]["offset"]["default"],
+            "",
+        )
+        prepare_parameters = schemas[
+            "prepare_save_videos_to_favorite_folder"
+        ]["parameters"]
+        self.assertIn("source_ids", prepare_parameters["required"])
+        self.assertEqual(
+            prepare_parameters["properties"]["privacy"]["default"],
+            "private",
+        )
+        self.assertIn(
+            "新的用户轮次",
+            schemas["prepare_save_videos_to_favorite_folder"]["description"],
+        )
+        commit_parameters = schemas[
+            "commit_save_videos_to_favorite_folder"
+        ]["parameters"]
+        self.assertEqual(commit_parameters["required"], ["confirmation_id"])
         self.assertIn("submit_agent_answer", schemas)
         self.assertIn(
             "source_ids",
@@ -400,7 +422,9 @@ class AgentToolsTest(unittest.TestCase):
             ],
             total_count=1,
             skipped_count=0,
-            pages_fetched=2,
+            pages_fetched=1,
+            has_more=True,
+            next_offset="next-cursor",
         )
 
     def test_executes_user_dynamics_tool_and_projects_result(self) -> None:
@@ -411,18 +435,27 @@ class AgentToolsTest(unittest.TestCase):
                 return_value={"SESSDATA": "test-value"},
             ),
             patch(
-                "bili_agent_cli.agent.tools.bili.get_user_dynamics.fetch_all_user_dynamics",
+                "bili_agent_cli.agent.tools.bili.get_user_dynamics.fetch_user_dynamics_page",
                 new=AsyncMock(return_value=response),
             ) as fetch_mock,
         ):
             result = asyncio.run(
-                execute_tool("get_user_dynamics", {"user_mid": "456"})
+                execute_tool(
+                    "get_user_dynamics",
+                    {"user_mid": "456", "offset": "current-cursor"},
+                )
             )
 
         self.assertTrue(result["ok"])
-        fetch_mock.assert_awaited_once_with("456", "SESSDATA=test-value")
+        fetch_mock.assert_awaited_once_with(
+            "456",
+            "current-cursor",
+            "SESSDATA=test-value",
+        )
         self.assertEqual(result["data"]["user_mid"], "456")
-        self.assertEqual(result["data"]["pages_fetched"], 2)
+        self.assertEqual(result["data"]["pages_fetched"], 1)
+        self.assertTrue(result["data"]["has_more"])
+        self.assertEqual(result["data"]["next_offset"], "next-cursor")
         item = result["data"]["items"][0]
         self.assertEqual(item["published_at"], "2025-09-10 10:46 (UTC+8)")
         self.assertEqual(
@@ -439,6 +472,7 @@ class AgentToolsTest(unittest.TestCase):
             {},
             {"user_mid": "0"},
             {"user_mid": "UP主名字"},
+            {"user_mid": "456", "offset": "x" * 1001},
             {"user_mid": "456", "unknown": True},
         ):
             with self.subTest(arguments=arguments):
@@ -453,7 +487,13 @@ class AgentToolsTest(unittest.TestCase):
     def test_maps_user_dynamics_domain_error_to_stable_code(self) -> None:
         with patch(
             "bili_agent_cli.agent.registry.get_user_dynamics_tool",
-            new=AsyncMock(side_effect=UserDynamicsError("sensitive detail")),
+            new=AsyncMock(
+                side_effect=UserDynamicsError(
+                    "UP主动态接口错误 -352: 风控校验失败",
+                    status=412,
+                    code=-352,
+                )
+            ),
         ):
             result = asyncio.run(
                 execute_tool("get_user_dynamics", {"user_mid": "456"})
@@ -461,9 +501,18 @@ class AgentToolsTest(unittest.TestCase):
 
         self.assertEqual(
             result,
-            {"ok": False, "error": "USER_DYNAMICS_FETCH_ERROR"},
+            {
+                "ok": False,
+                "error": "USER_DYNAMICS_FETCH_ERROR",
+                "details": {
+                    "upstream_code": -352,
+                    "upstream_message": (
+                        "UP主动态接口错误 -352: 风控校验失败"
+                    ),
+                    "http_status": 412,
+                },
+            },
         )
-        self.assertNotIn("sensitive", str(result))
 
     def test_rejects_invalid_user_dynamics_result(self) -> None:
         definition = TOOL_REGISTRY["get_user_dynamics"]

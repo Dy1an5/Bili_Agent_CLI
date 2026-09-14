@@ -315,7 +315,7 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_agent_reports_compaction(self) -> None:
         manager = ContextManager(
             ContextSettings(
-                max_input_units=7_000,
+                max_input_units=9_000,
                 summarize_at_units=100,
                 recent_turns=1,
                 summary_max_tokens=100,
@@ -1029,6 +1029,85 @@ class AgentContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [turn.status for turn in completed.turns[-2:]],
             ["interrupted", "completed"],
+        )
+
+    async def test_tool_execution_context_receives_sources_from_prior_call(self) -> None:
+        create_message = AsyncMock(
+            side_effect=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "search-call",
+                            "function": {
+                                "name": "search_videos",
+                                "arguments": '{"keyword":"动态视频"}',
+                            },
+                        },
+                        {
+                            "id": "prepare-call",
+                            "function": {
+                                "name": "prepare_save_videos_to_favorite_folder",
+                                "arguments": json.dumps(
+                                    {
+                                        "folder_title": "UP 主动态",
+                                        "source_ids": [
+                                            "bilibili:video:BV1trusted"
+                                        ],
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            },
+                        },
+                    ],
+                },
+                {"role": "assistant", "content": "请确认收藏计划"},
+            ]
+        )
+        execute = AsyncMock(
+            side_effect=[
+                {
+                    "ok": True,
+                    "data": {
+                        "videos": [
+                            {
+                                "source_id": "bilibili:video:BV1trusted",
+                                "bvid": "BV1trusted",
+                                "title": "可信视频",
+                            }
+                        ]
+                    },
+                },
+                {
+                    "ok": True,
+                    "data": {
+                        "confirmation_id": "00000000-0000-0000-0000-000000000001",
+                        "videos": [],
+                    },
+                },
+            ]
+        )
+
+        with (
+            patch(
+                "bili_agent_cli.agent.agent_loop.create_agent_message",
+                new=create_message,
+            ),
+            patch(
+                "bili_agent_cli.agent.agent_loop.execute_tool",
+                new=execute,
+            ),
+        ):
+            await run_agent("搜索并准备收藏动态视频")
+
+        first_context = execute.await_args_list[0].args[2]
+        second_context = execute.await_args_list[1].args[2]
+        self.assertEqual(first_context.current_turn_id, second_context.current_turn_id)
+        self.assertEqual(first_context.trusted_sources, [])
+        self.assertEqual(
+            [source.source_id for source in second_context.trusted_sources],
+            ["bilibili:video:BV1trusted"],
         )
 
 

@@ -100,6 +100,25 @@ def get_sessdata_cookie_header(cookies: dict[str, str]) -> str:
     return f"SESSDATA={sessdata}"
 
 
+def get_csrf_token(cookies: dict[str, str]) -> str:
+    csrf_token = cookies.get("bili_jct", "").strip()
+
+    if not csrf_token:
+        raise ProfileError("登录资料中没有有效的 bili_jct")
+
+    return csrf_token
+
+
+def get_write_cookie_header(cookies: dict[str, str]) -> str:
+    sessdata = cookies.get("SESSDATA", "").strip()
+    csrf_token = get_csrf_token(cookies)
+
+    if not sessdata:
+        raise ProfileError("登录资料中没有有效的 SESSDATA")
+
+    return f"SESSDATA={sessdata}; bili_jct={csrf_token}"
+
+
 def get_user_id(cookies: dict[str, str]) -> str:
     user_id = cookies.get("DedeUserID", "").strip()
 

@@ -305,5 +305,10 @@ async def _print_context(session_id: UUID | None) -> None:
             if session.pending_turn is not None
             else None
         ),
+        "pending_favorite_save": (
+            session.pending_favorite_save.model_dump(mode="json")
+            if session.pending_favorite_save is not None
+            else None
+        ),
     }
     print(json.dumps(snapshot, ensure_ascii=False, indent=2))

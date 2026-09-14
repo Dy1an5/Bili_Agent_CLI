@@ -42,6 +42,7 @@ from .memory.service import (
 )
 from .memory.store import MemoryStorageError, MemoryStore
 from .executor import execute_tool
+from .tool_context import ToolExecutionContext
 from .models import (
     AgentFinalAnswer,
     AgentMemoryResult,
@@ -66,6 +67,7 @@ SYSTEM_PROMPT = """
 查询观看历史
 搜索视频
 分析用户画像
+将可信工具结果中的视频保存到收藏夹
 
 规则：
 不编造视频
@@ -79,6 +81,11 @@ pagination_state 的 has_more 为 false 时，不要重复请求同一页
 最终回答必须单独调用 submit_agent_answer 提交 answer 和实际使用的 source_ids
 不要把没有用于回答的视频放进 source_ids，也不要编造 source_id
 不要声称长期记忆已经成功保存；记忆保存结果由程序另行提示
+收藏写入必须先调用 prepare_save_videos_to_favorite_folder，展示预检计划并结束回答
+只有用户在下一轮明确确认后，才能调用 commit_save_videos_to_favorite_folder
+不得在同一用户轮次中连续调用 prepare 和 commit，也不得自行构造 source_id 或 confirmation_id
+commit 返回 retryable=true 时保留原确认计划；用户下一轮要求重试可直接再次 commit，不必重新 prepare
+写入失败时只陈述工具返回的 added_count、upstream_code 和 upstream_message，不要推测成功数量或原因
 """.strip()
 
 session_store = FileSessionStore(
@@ -448,6 +455,11 @@ async def run_agent(
                         tool_result = await execute_tool(
                             tool_name,
                             raw_arguments,
+                            ToolExecutionContext(
+                                session=session,
+                                current_turn_id=pending_turn.id,
+                                trusted_sources=source_candidates,
+                            ),
                         )
                         pagination_state = extract_pagination_state(
                             tool_name,

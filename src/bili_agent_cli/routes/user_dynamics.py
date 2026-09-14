@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, HTTPException, Path, Query, status
 
 from bili_agent_cli.bilibili.user_dynamics import (
     UserDynamicsError,
-    fetch_all_user_dynamics,
+    fetch_user_dynamics_page,
 )
 from bili_agent_cli.profile import (
     ProfileError,
@@ -20,13 +20,15 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 
 
 @router.get("/{user_mid}/dynamics", response_model=UserDynamicsResponse)
-async def get_all_user_dynamics(
+async def get_user_dynamics(
     user_mid: Annotated[str, Path(pattern=r"^[1-9]\d*$")],
+    offset: Annotated[str, Query(max_length=1000)] = "",
 ) -> UserDynamicsResponse:
     try:
         cookies = load_profile()
-        return await fetch_all_user_dynamics(
+        return await fetch_user_dynamics_page(
             user_mid,
+            offset,
             get_sessdata_cookie_header(cookies),
         )
     except ProfileError as error:

@@ -12,8 +12,14 @@ from bili_agent_cli.agent.context import (
     InMemorySessionStore,
     SessionNotFoundError,
 )
+from bili_agent_cli.agent.context.models import PendingFavoriteSave
 from bili_agent_cli.agent.context.store import CONVERSATIONS_DIR
 from bili_agent_cli.profile import PROJECT_ROOT
+from bili_agent_cli.schemas.favorites import (
+    FavoriteFolderPrivacy,
+    FavoriteSavePlan,
+    FavoriteSaveVideo,
+)
 
 
 class FakeClock:
@@ -153,6 +159,36 @@ class FileSessionStoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(loaded.pending_turn)
         self.assertEqual(loaded.pending_turn.user_content, "继续翻页")
         self.assertEqual(loaded.pending_turn.status, "interrupted")
+
+    async def test_pending_favorite_confirmation_survives_restart(self) -> None:
+        first_store = self.make_store()
+        session = await first_store.create()
+        now = datetime.now(timezone.utc)
+        session.pending_favorite_save = PendingFavoriteSave(
+            confirmation_id=session.id,
+            prepared_turn_id=session.id,
+            created_at=now,
+            expires_at=now + timedelta(minutes=30),
+            plan=FavoriteSavePlan(
+                folder_title="UP 主动态",
+                will_create_folder=True,
+                privacy=FavoriteFolderPrivacy.PRIVATE,
+                videos=[FavoriteSaveVideo(bvid="BV1trusted", aid="42")],
+            ),
+        )
+        await first_store.save(session)
+
+        loaded = await self.make_store().get(session.id)
+
+        self.assertIsNotNone(loaded.pending_favorite_save)
+        self.assertEqual(
+            loaded.pending_favorite_save.confirmation_id,
+            session.id,
+        )
+        self.assertEqual(
+            loaded.pending_favorite_save.plan.videos[0].aid,
+            "42",
+        )
 
     async def test_cache_expiry_does_not_delete_saved_session(self) -> None:
         clock = FakeClock()

@@ -9,6 +9,7 @@ from .models import (
     ConversationSession,
     ConversationSessionRecord,
     ConversationTurn,
+    PendingFavoriteSave,
 )
 from .store import (
     FileSessionStore,
@@ -26,6 +27,7 @@ __all__ = [
     "ConversationSession",
     "ConversationSessionRecord",
     "ConversationTurn",
+    "PendingFavoriteSave",
     "FileSessionStore",
     "InMemorySessionStore",
     "SessionNotFoundError",

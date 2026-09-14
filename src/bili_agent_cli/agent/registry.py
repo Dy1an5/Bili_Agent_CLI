@@ -3,12 +3,17 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 
 from bili_agent_cli.agent.models import AgentFinalAnswer
+from bili_agent_cli.agent.tool_context import ToolExecutionContext
 
 from bili_agent_cli.schemas.favorites import (
     FavoriteFolderListResponse,
     FavoriteFolderVideosQuery,
     FavoriteFolderVideosResponse,
     FavoriteFoldersQuery,
+    CommitFavoriteSaveArgs,
+    FavoriteSavePreviewResponse,
+    FavoriteSaveResponse,
+    PrepareFavoriteSaveArgs,
 )
 from bili_agent_cli.schemas.following_feed import (
     FollowingFeedQuery,
@@ -29,6 +34,8 @@ from bili_agent_cli.schemas.watch_later import WatchLaterQuery, WatchLaterRespon
 from .result_models import (
     project_favorite_folder_videos,
     project_favorite_folders,
+    project_favorite_save,
+    project_favorite_save_preview,
     project_following_feed,
     project_following_users,
     project_watch_history,
@@ -45,9 +52,16 @@ from .tools.bili.get_following_users import get_following_users_tool
 from .tools.bili.get_history import get_watch_history_tool
 from .tools.bili.get_user_dynamics import get_user_dynamics_tool
 from .tools.bili.get_watch_later import get_watch_later_tool
+from .tools.bili.save_favorites import (
+    commit_save_videos_to_favorite_folder_tool,
+    prepare_save_videos_to_favorite_folder_tool,
+)
 from .tools.bili.search_videos import search_videos_tool
 
-ToolExecutor = Callable[[BaseModel], Awaitable[BaseModel]]
+ToolExecutor = Callable[
+    [BaseModel, ToolExecutionContext | None],
+    Awaitable[BaseModel],
+]
 ToolResultProjector = Callable[[BaseModel], BaseModel]
 SUBMIT_AGENT_ANSWER_TOOL_NAME = "submit_agent_answer"
 
@@ -62,60 +76,102 @@ class ToolDefinition:
     result_projector: ToolResultProjector
 
 
-async def _run_get_following_feed_tool(args: BaseModel) -> BaseModel:
+async def _run_get_following_feed_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
     if not isinstance(args, FollowingFeedQuery):
         raise TypeError("get_following_feed_tool 收到了错误的参数模型")
 
     return await get_following_feed_tool(args)
 
 
-async def _run_get_following_users_tool(args: BaseModel) -> BaseModel:
+async def _run_get_following_users_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
     if not isinstance(args, FollowingUsersQuery):
         raise TypeError("get_following_users_tool 收到了错误的参数模型")
 
     return await get_following_users_tool(args)
 
 
-async def _run_get_favorite_folders_tool(args: BaseModel) -> BaseModel:
+async def _run_get_favorite_folders_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
     if not isinstance(args, FavoriteFoldersQuery):
         raise TypeError("get_favorite_folders_tool 收到了错误的参数模型")
 
     return await get_favorite_folders_tool(args)
 
 
-async def _run_get_favorite_folder_videos_tool(args: BaseModel) -> BaseModel:
+async def _run_get_favorite_folder_videos_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
     if not isinstance(args, FavoriteFolderVideosQuery):
         raise TypeError("get_favorite_folder_videos_tool 收到了错误的参数模型")
 
     return await get_favorite_folder_videos_tool(args)
 
 
-async def _run_get_watch_later_tool(args: BaseModel) -> BaseModel:
+async def _run_get_watch_later_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
     if not isinstance(args, WatchLaterQuery):
         raise TypeError("get_watch_later_tool 收到了错误的参数模型")
 
     return await get_watch_later_tool(args)
 
 
-async def _run_get_watch_history_tool(args: BaseModel) -> BaseModel:
+async def _run_get_watch_history_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
     if not isinstance(args, HistoryQuery):
         raise TypeError("get_watch_history_tool 收到了错误的参数模型")
 
     return await get_watch_history_tool(args)
 
 
-async def _run_search_videos_tool(args: BaseModel) -> BaseModel:
+async def _run_search_videos_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
     if not isinstance(args, SearchVideoQuery):
         raise TypeError("search_videos_tool 收到了错误的参数模型")
 
     return await search_videos_tool(args)
 
 
-async def _run_get_user_dynamics_tool(args: BaseModel) -> BaseModel:
+async def _run_get_user_dynamics_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
     if not isinstance(args, UserDynamicsArgs):
         raise TypeError("get_user_dynamics_tool 收到了错误的参数模型")
 
     return await get_user_dynamics_tool(args)
+
+
+async def _run_prepare_favorite_save_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
+    if not isinstance(args, PrepareFavoriteSaveArgs):
+        raise TypeError("prepare 收藏写工具收到了错误的参数模型")
+    return await prepare_save_videos_to_favorite_folder_tool(args, context)
+
+
+async def _run_commit_favorite_save_tool(
+    args: BaseModel,
+    context: ToolExecutionContext | None,
+) -> BaseModel:
+    if not isinstance(args, CommitFavoriteSaveArgs):
+        raise TypeError("commit 收藏写工具收到了错误的参数模型")
+    return await commit_save_videos_to_favorite_folder_tool(args, context)
 
 
 TOOL_REGISTRY: dict[str, ToolDefinition] = {
@@ -203,15 +259,42 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
     "get_user_dynamics": ToolDefinition(
         name="get_user_dynamics",
         description=(
-            "获取指定 Bilibili UP 主的全部动态。user_mid 可直接由用户提供，"
+            "分页获取指定 Bilibili UP 主的动态。user_mid 可直接由用户提供，"
             "也可来自 get_following_users 返回的 mid；无需其他前置工具。"
-            "工具会自动遍历所有上游 offset 分页，不需要再次调用工具翻页。"
+            "首次调用 offset 留空；需要继续时使用返回的 next_offset。"
+            "用户只要最新内容时不要继续翻页；只有用户明确要求更多或全部时才翻页。"
             "返回视频、图文、转发等动态；视频内容中的 source_id 可用于引用。"
         ),
         args_model=UserDynamicsArgs,
         result_model=UserDynamicsResponse,
         executor=_run_get_user_dynamics_tool,
         result_projector=project_user_dynamics,
+    ),
+    "prepare_save_videos_to_favorite_folder": ToolDefinition(
+        name="prepare_save_videos_to_favorite_folder",
+        description=(
+            "预检把此前工具获取的视频保存到指定收藏夹，不执行写入。"
+            "source_ids 必须来自当前会话可信工具结果；收藏夹不存在时计划新建。"
+            "返回 confirmation_id 后必须向用户展示计划，并等待新的用户轮次确认；"
+            "不得在同一轮调用 commit 工具。"
+        ),
+        args_model=PrepareFavoriteSaveArgs,
+        result_model=FavoriteSavePreviewResponse,
+        executor=_run_prepare_favorite_save_tool,
+        result_projector=project_favorite_save_preview,
+    ),
+    "commit_save_videos_to_favorite_folder": ToolDefinition(
+        name="commit_save_videos_to_favorite_folder",
+        description=(
+            "在用户新一轮明确确认后，使用 prepare 工具返回的 confirmation_id "
+            "执行收藏写入。确认 ID 绑定原计划、30 分钟过期，完整成功后不可复用；"
+            "若返回 retryable=true，可在用户下一轮要求重试时继续使用同一确认 ID，"
+            "工具只会重试尚未确认成功的视频。不得自行构造 ID 或修改目标。"
+        ),
+        args_model=CommitFavoriteSaveArgs,
+        result_model=FavoriteSaveResponse,
+        executor=_run_commit_favorite_save_tool,
+        result_projector=project_favorite_save,
     ),
 }
 

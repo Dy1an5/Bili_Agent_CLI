@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import httpx
 
+from bili_agent_cli.bilibili.favorites import FavoriteWriteError
 from bili_agent_cli.bilibili.following_users import FollowingUsersError
 from bili_agent_cli.bilibili.history import HistoryError
 from bili_agent_cli.main import app
@@ -19,6 +20,10 @@ from bili_agent_cli.schemas.favorites import (
     FavoriteFolder,
     FavoriteFolderListResponse,
     FavoriteFolderVideosResponse,
+    FavoriteSaveResponse,
+    FavoriteSaveStatus,
+    FavoriteSaveTargetFolder,
+    FavoriteSaveVideo,
     FavoriteVideo,
     FavoriteVideoAuthor,
 )
@@ -406,6 +411,154 @@ class MainTest(unittest.TestCase):
         query = fetch_mock.await_args.args[1]
         self.assertEqual(query.page, 2)
         self.assertEqual(query.page_size, 10)
+
+    def test_save_favorite_videos_route_passes_write_auth(self) -> None:
+        parsed_response = FavoriteSaveResponse(
+            status=FavoriteSaveStatus.COMPLETED,
+            folder=FavoriteSaveTargetFolder(
+                id="2002",
+                title="自动收藏",
+                created=True,
+            ),
+            videos=[
+                FavoriteSaveVideo(
+                    bvid="BV1favorite",
+                    aid="42",
+                    title="测试视频",
+                )
+            ],
+            requested_count=1,
+            added_count=1,
+            retryable=False,
+        )
+        cookies = {
+            "SESSDATA": "session-value",
+            "bili_jct": "csrf-value",
+            "DedeUserID": "123",
+        }
+
+        with (
+            patch(
+                "bili_agent_cli.routes.favorites.load_profile",
+                return_value=cookies,
+            ),
+            patch(
+                "bili_agent_cli.routes.favorites.save_videos_to_favorite_folder",
+                new=AsyncMock(return_value=parsed_response),
+            ) as save_mock,
+        ):
+            response = asyncio.run(
+                self._post(
+                    "/api/favorites/folders/save-videos",
+                    {
+                        "folder_title": "自动收藏",
+                        "bvids": ["BV1favorite"],
+                    },
+                )
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), parsed_response.model_dump(mode="json"))
+        request = save_mock.await_args.args[0]
+        self.assertEqual(request.privacy.value, "private")
+        self.assertEqual(save_mock.await_args.args[1:], (
+            "123",
+            "SESSDATA=session-value",
+            "SESSDATA=session-value; bili_jct=csrf-value",
+            "csrf-value",
+        ))
+
+    def test_save_favorite_videos_route_reports_partial_as_207(self) -> None:
+        parsed_response = FavoriteSaveResponse(
+            status=FavoriteSaveStatus.PARTIAL,
+            folder=FavoriteSaveTargetFolder(
+                id="2002",
+                title="自动收藏",
+                created=True,
+            ),
+            videos=[FavoriteSaveVideo(bvid="BV1favorite", aid="42")],
+            requested_count=1,
+            added_count=0,
+            retryable=True,
+        )
+
+        with (
+            patch(
+                "bili_agent_cli.routes.favorites.load_profile",
+                return_value={
+                    "SESSDATA": "session-value",
+                    "bili_jct": "csrf-value",
+                    "DedeUserID": "123",
+                },
+            ),
+            patch(
+                "bili_agent_cli.routes.favorites.save_videos_to_favorite_folder",
+                new=AsyncMock(return_value=parsed_response),
+            ),
+        ):
+            response = asyncio.run(
+                self._post(
+                    "/api/favorites/folders/save-videos",
+                    {
+                        "folder_title": "自动收藏",
+                        "bvids": ["BV1favorite"],
+                        "privacy": "public",
+                    },
+                )
+            )
+
+        self.assertEqual(response.status_code, 207)
+        self.assertEqual(response.json()["status"], "partial")
+
+    def test_save_favorite_videos_route_validates_and_maps_errors(self) -> None:
+        invalid = asyncio.run(
+            self._post(
+                "/api/favorites/folders/save-videos",
+                {"folder_title": "", "bvids": ["not-a-bvid"]},
+            )
+        )
+
+        with patch(
+            "bili_agent_cli.routes.favorites.load_profile",
+            side_effect=ProfileError("未登录"),
+        ):
+            unauthorized = asyncio.run(
+                self._post(
+                    "/api/favorites/folders/save-videos",
+                    {
+                        "folder_title": "自动收藏",
+                        "bvids": ["BV1favorite"],
+                    },
+                )
+            )
+
+        with (
+            patch(
+                "bili_agent_cli.routes.favorites.load_profile",
+                return_value={
+                    "SESSDATA": "session-value",
+                    "bili_jct": "csrf-value",
+                    "DedeUserID": "123",
+                },
+            ),
+            patch(
+                "bili_agent_cli.routes.favorites.save_videos_to_favorite_folder",
+                new=AsyncMock(side_effect=FavoriteWriteError("上游错误")),
+            ),
+        ):
+            bad_gateway = asyncio.run(
+                self._post(
+                    "/api/favorites/folders/save-videos",
+                    {
+                        "folder_title": "自动收藏",
+                        "bvids": ["BV1favorite"],
+                    },
+                )
+            )
+
+        self.assertEqual(invalid.status_code, 422)
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(bad_gateway.status_code, 502)
 
     def test_watch_later_route_returns_response_model(self) -> None:
         parsed_response = WatchLaterResponse(

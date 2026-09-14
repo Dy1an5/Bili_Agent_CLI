@@ -9,6 +9,17 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from bili_agent_cli.agent.models import AgentPaginationState, AgentSource
+from bili_agent_cli.schemas.favorites import FavoriteSavePlan
+
+
+class PendingFavoriteSave(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation_id: UUID
+    prepared_turn_id: UUID
+    created_at: datetime
+    expires_at: datetime
+    plan: FavoriteSavePlan
 
 
 class AgentEvidenceBatch(BaseModel):
@@ -49,6 +60,7 @@ class ConversationSessionRecord(BaseModel):
     summary: str | None = None
     turns: list[ConversationTurn] = Field(default_factory=list)
     pending_turn: ConversationTurn | None = None
+    pending_favorite_save: PendingFavoriteSave | None = None
 
 
 @dataclass
@@ -59,6 +71,7 @@ class ConversationSession:
     summary: str | None = None
     turns: list[ConversationTurn] = field(default_factory=list)
     pending_turn: ConversationTurn | None = None
+    pending_favorite_save: PendingFavoriteSave | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
     def to_record(self) -> ConversationSessionRecord:
@@ -69,6 +82,7 @@ class ConversationSession:
             summary=self.summary,
             turns=self.turns,
             pending_turn=self.pending_turn,
+            pending_favorite_save=self.pending_favorite_save,
         )
 
     @classmethod
@@ -83,4 +97,5 @@ class ConversationSession:
             summary=record.summary,
             turns=record.turns,
             pending_turn=record.pending_turn,
+            pending_favorite_save=record.pending_favorite_save,
         )

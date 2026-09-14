@@ -321,6 +321,62 @@ def _parse_page(payload: dict[str, Any]) -> tuple[list[Any], bool, str | None]:
     return raw_items, has_more, offset
 
 
+async def fetch_user_dynamics_page(
+    user_mid: str,
+    offset: str,
+    sessdata_cookie: str,
+    client: httpx.AsyncClient | None = None,
+) -> UserDynamicsResponse:
+    owns_client = client is None
+    request_client = client or httpx.AsyncClient(timeout=20.0)
+
+    try:
+        try:
+            mixin_key = await fetch_wbi_mixin_key(
+                request_client,
+                sessdata_cookie,
+            )
+        except WbiSigningError as error:
+            raise UserDynamicsError(
+                str(error),
+                status=error.status,
+                code=error.code,
+            ) from error
+
+        payload = await _request_user_dynamics_page(
+            request_client,
+            user_mid,
+            offset,
+            mixin_key,
+            sessdata_cookie,
+        )
+        raw_items, has_more, next_offset = _parse_page(payload)
+    finally:
+        if owns_client:
+            await request_client.aclose()
+
+    items: list[UserDynamicItem] = []
+    seen_dynamic_ids: set[str] = set()
+    skipped_count = 0
+    for value in raw_items:
+        parsed = _parse_dynamic(value)
+        if parsed is None:
+            skipped_count += 1
+        elif parsed.dynamic_id not in seen_dynamic_ids:
+            seen_dynamic_ids.add(parsed.dynamic_id)
+            items.append(parsed)
+
+    return UserDynamicsResponse(
+        user_mid=user_mid,
+        items=items,
+        total_count=len(items),
+        skipped_count=skipped_count,
+        pages_fetched=1,
+        has_more=has_more,
+        next_offset=next_offset if has_more else None,
+    )
+
+
 async def fetch_all_user_dynamics(
     user_mid: str,
     sessdata_cookie: str,
