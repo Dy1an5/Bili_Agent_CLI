@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from bili_agent_cli.content.models import VideoRecord
+
 
 class UserDynamicsArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -69,3 +71,7 @@ class UserDynamicsResponse(BaseModel):
     pages_fetched: int = Field(ge=1)
     has_more: bool = False
     next_offset: str | None = None
+    video_records: list[VideoRecord] = Field(default_factory=list, exclude=True)
+    ingestion_applied: bool = Field(default=False, exclude=True)
+    ingestion_status: str = Field(default="completed", exclude=True)
+    ingestion_skipped_count: int = Field(default=0, ge=0, exclude=True)

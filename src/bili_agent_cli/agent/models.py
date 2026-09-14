@@ -12,8 +12,9 @@ from pydantic import (
 )
 
 
-def build_video_source_id(bvid: str) -> str:
-    return f"bilibili:video:{bvid}"
+def build_video_source_id(bvid: str, cid: str | None = None) -> str:
+    legacy = f"bilibili:video:{bvid}"
+    return legacy if cid is None else f"{legacy}:part:{cid}"
 
 
 class AgentRunRequest(BaseModel):
@@ -27,7 +28,7 @@ class AgentRunRequest(BaseModel):
 
 class AgentSource(BaseModel):
     bvid: str
-    cid :str | None = None
+    cid: str | None = None
     title: str | None = None
     author_name: str | None = None
     folder_id: str | None = None
@@ -36,10 +37,15 @@ class AgentSource(BaseModel):
 
     @model_validator(mode="after")
     def populate_source_id(self) -> AgentSource:
-        expected_source_id = build_video_source_id(self.bvid)
-        if self.source_id and self.source_id != expected_source_id:
+        expected_source_id = build_video_source_id(self.bvid, self.cid)
+        legacy_source_id = build_video_source_id(self.bvid)
+        if self.source_id and self.source_id not in {
+            expected_source_id,
+            legacy_source_id,
+        }:
             raise ValueError("source_id 与 bvid 不匹配")
-        self.source_id = expected_source_id
+        if not self.source_id:
+            self.source_id = expected_source_id
         return self
 
 

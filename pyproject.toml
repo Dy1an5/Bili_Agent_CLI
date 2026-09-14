@@ -8,7 +8,6 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi[standard]>=0.141.1",
     "httpx>=0.28.1",
     "prompt-toolkit>=3.0.53",
     "pydantic>=2.13.5",

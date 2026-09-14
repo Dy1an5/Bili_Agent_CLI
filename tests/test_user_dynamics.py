@@ -11,8 +11,6 @@ from bili_agent_cli.bilibili.user_dynamics import (
     fetch_all_user_dynamics,
     fetch_user_dynamics_page,
 )
-from bili_agent_cli.main import app
-from bili_agent_cli.profile import ProfileError
 from bili_agent_cli.schemas.user_dynamics import UserDynamicsResponse
 
 
@@ -374,76 +372,6 @@ class UserDynamicsClientTest(unittest.TestCase):
                 "SESSDATA=test",
                 client,
             )
-
-
-class UserDynamicsRouteTest(unittest.TestCase):
-    async def _request(self, path: str) -> httpx.Response:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app),
-            base_url="http://testserver",
-        ) as client:
-            return await client.get(path)
-
-    def test_route_returns_response_model(self) -> None:
-        parsed_response = UserDynamicsResponse(
-            user_mid="456",
-            items=[],
-            total_count=0,
-            skipped_count=0,
-            pages_fetched=1,
-        )
-        with (
-            patch(
-                "bili_agent_cli.routes.user_dynamics.load_profile",
-                return_value={"SESSDATA": "test", "DedeUserID": "123"},
-            ),
-            patch(
-                "bili_agent_cli.routes.user_dynamics.fetch_user_dynamics_page",
-                new=AsyncMock(return_value=parsed_response),
-            ) as fetch_mock,
-        ):
-            response = asyncio.run(
-                self._request(
-                    "/api/users/456/dynamics?offset=current-cursor"
-                )
-            )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), parsed_response.model_dump(mode="json"))
-        fetch_mock.assert_awaited_once_with(
-            "456",
-            "current-cursor",
-            "SESSDATA=test",
-        )
-
-    def test_route_validates_mid_and_maps_errors(self) -> None:
-        invalid = asyncio.run(self._request("/api/users/0/dynamics"))
-
-        with patch(
-            "bili_agent_cli.routes.user_dynamics.load_profile",
-            side_effect=ProfileError("未登录"),
-        ):
-            unauthorized = asyncio.run(self._request("/api/users/456/dynamics"))
-
-        with (
-            patch(
-                "bili_agent_cli.routes.user_dynamics.load_profile",
-                return_value={"SESSDATA": "test"},
-            ),
-            patch(
-                "bili_agent_cli.routes.user_dynamics.fetch_user_dynamics_page",
-                new=AsyncMock(side_effect=UserDynamicsError("上游错误")),
-            ),
-        ):
-            bad_gateway = asyncio.run(
-                self._request("/api/users/456/dynamics")
-            )
-
-        self.assertEqual(invalid.status_code, 422)
-        self.assertEqual(unauthorized.status_code, 401)
-        self.assertEqual(unauthorized.json(), {"detail": "未登录"})
-        self.assertEqual(bad_gateway.status_code, 502)
-        self.assertEqual(bad_gateway.json(), {"detail": "上游错误"})
 
 
 if __name__ == "__main__":

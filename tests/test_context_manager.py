@@ -257,6 +257,37 @@ class ContextManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([source.bvid for source in sources], ["BV1", "BV2"])
         self.assertEqual(sources[1].author_name, "UP主")
 
+    def test_extract_sources_supports_unified_compound_video_shape(self) -> None:
+        sources = extract_sources(
+            {
+                "ok": True,
+                "data": {
+                    "videos": [
+                        {
+                            "identity": {"bvid": "BV1parted", "cid": "88"},
+                            "author": {"mid": "1", "name": "UP主"},
+                            "detail": {"title": "分P视频"},
+                            "contexts": {
+                                "favorite": {"folder_id": "10"}
+                            },
+                            "source_id": (
+                                "bilibili:video:BV1parted:part:88"
+                            ),
+                        }
+                    ]
+                },
+            }
+        )
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].cid, "88")
+        self.assertEqual(sources[0].title, "分P视频")
+        self.assertEqual(sources[0].folder_id, "10")
+        self.assertEqual(
+            sources[0].source_id,
+            "bilibili:video:BV1parted:part:88",
+        )
+
     def test_extracts_following_pagination_state(self) -> None:
         state = extract_pagination_state(
             "get_following_feed",

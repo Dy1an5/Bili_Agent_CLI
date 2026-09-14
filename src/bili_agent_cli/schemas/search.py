@@ -13,6 +13,7 @@ from pydantic import (
 )
 
 from bili_agent_cli.schemas.common import VideoStats
+from bili_agent_cli.content.models import VideoRecord
 
 
 SearchKeyword = Annotated[
@@ -117,3 +118,7 @@ class SearchVideoResponse(BaseModel):
     page: int
     page_size: int
     has_more: bool
+    video_records: list[VideoRecord] = Field(default_factory=list, exclude=True)
+    ingestion_applied: bool = Field(default=False, exclude=True)
+    ingestion_status: str = Field(default="completed", exclude=True)
+    ingestion_skipped_count: int = Field(default=0, ge=0, exclude=True)

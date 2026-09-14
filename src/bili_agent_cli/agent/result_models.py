@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, PlainSerializer, computed_field
+from pydantic import BaseModel, computed_field
 
 from bili_agent_cli.agent.models import build_video_source_id
+from bili_agent_cli.content.models import VideoRecord
+from bili_agent_cli.content.time import (
+    BeijingTime,
+    format_beijing_time,
+)
 from bili_agent_cli.schemas.common import VideoStats
 from bili_agent_cli.schemas.following_feed import (
     FollowingDynamicStats,
@@ -19,32 +22,6 @@ from bili_agent_cli.schemas.favorites import (
 )
 from bili_agent_cli.schemas.history import HistoryResponse
 from bili_agent_cli.schemas.user_dynamics import UserDynamicStats
-
-
-BEIJING_TIMEZONE = timezone(timedelta(hours=8), "UTC+8")
-BEIJING_TIME_FORMAT = "%Y-%m-%d %H:%M (UTC+8)"
-
-
-def format_beijing_time(value: datetime | None) -> str | None:
-    """把时间统一换算成 UTC+8 的可读文本，避免模型自行换算。"""
-
-    if value is None:
-        return None
-
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-
-    return value.astimezone(BEIJING_TIMEZONE).strftime(BEIJING_TIME_FORMAT)
-
-
-BeijingTime = Annotated[
-    datetime,
-    PlainSerializer(
-        format_beijing_time,
-        return_type=str,
-        when_used="json",
-    ),
-]
 
 
 class LlmVideoAuthor(BaseModel):
@@ -255,6 +232,99 @@ class LlmUserDynamicsResult(BaseModel):
     next_offset: str | None
 
 
+class LlmIngestedDynamicContent(BaseModel):
+    major_type: str | None
+    title: str | None
+    text: str | None
+    bvid: str | None
+    cid: str | None = None
+    jump_url: str | None
+
+    @computed_field
+    @property
+    def source_id(self) -> str | None:
+        if self.bvid is None or self.cid is None:
+            return None
+        return build_video_source_id(self.bvid, self.cid)
+
+
+class LlmIngestedDynamicItem(BaseModel):
+    dynamic_id: str
+    type: str | None
+    published_at: BeijingTime | None
+    is_pinned: bool | None
+    author: LlmUserDynamicAuthor | None
+    content: LlmIngestedDynamicContent
+    stats: UserDynamicStats
+    original: LlmIngestedDynamicItem | None
+
+
+class LlmIngestedFavoriteResult(BaseModel):
+    folder: LlmFavoriteFolder
+    videos: list[VideoRecord]
+    page: int
+    page_size: int
+    has_more: bool
+    status: str
+    skipped_count: int
+
+
+class LlmIngestedPagedResult(BaseModel):
+    videos: list[VideoRecord]
+    total_count: int
+    page: int
+    page_size: int
+    has_more: bool
+    status: str
+    skipped_count: int
+
+
+class LlmIngestedHistoryResult(BaseModel):
+    videos: list[VideoRecord]
+    page_size: int
+    has_more: bool
+    next_max: int | None
+    next_view_at: int | None
+    status: str
+    skipped_count: int
+
+
+class LlmIngestedFollowingResult(BaseModel):
+    videos: list[VideoRecord]
+    has_more: bool
+    next_offset: str | None
+    status: str
+    skipped_count: int
+
+
+class LlmIngestedUserDynamicsResult(BaseModel):
+    user_mid: str
+    items: list[LlmIngestedDynamicItem]
+    videos: list[VideoRecord]
+    total_count: int
+    skipped_count: int
+    ingestion_skipped_count: int
+    pages_fetched: int
+    has_more: bool
+    next_offset: str | None
+    status: str
+
+
+def _dynamic_item_with_cid(
+    item: BaseModel,
+    cid_by_bvid: dict[str, str],
+) -> dict[str, object]:
+    payload = item.model_dump(mode="python")
+    content = payload.get("content")
+    if isinstance(content, dict):
+        bvid = content.get("bvid")
+        content["cid"] = cid_by_bvid.get(bvid) if isinstance(bvid, str) else None
+    original = getattr(item, "original", None)
+    if isinstance(original, BaseModel):
+        payload["original"] = _dynamic_item_with_cid(original, cid_by_bvid)
+    return payload
+
+
 def _project(result: BaseModel, model: type[BaseModel]) -> BaseModel:
     return model.model_validate(result.model_dump(mode="python"))
 
@@ -264,6 +334,18 @@ def project_favorite_folders(result: BaseModel) -> BaseModel:
 
 
 def project_favorite_folder_videos(result: BaseModel) -> BaseModel:
+    if getattr(result, "ingestion_applied", False):
+        return LlmIngestedFavoriteResult.model_validate(
+            {
+                "folder": result.folder.model_dump(mode="python"),
+                "videos": result.video_records,
+                "page": result.page,
+                "page_size": result.page_size,
+                "has_more": result.has_more,
+                "status": result.ingestion_status,
+                "skipped_count": result.ingestion_skipped_count,
+            }
+        )
     return _project(result, LlmFavoriteFolderVideosResult)
 
 
@@ -276,20 +358,64 @@ def project_favorite_save(result: BaseModel) -> BaseModel:
 
 
 def project_watch_later(result: BaseModel) -> BaseModel:
+    if getattr(result, "ingestion_applied", False):
+        return LlmIngestedPagedResult.model_validate(
+            {
+                "videos": result.video_records,
+                "total_count": result.total_count,
+                "page": result.page,
+                "page_size": result.page_size,
+                "has_more": result.has_more,
+                "status": result.ingestion_status,
+                "skipped_count": result.ingestion_skipped_count,
+            }
+        )
     return _project(result, LlmWatchLaterResult)
 
 
 def project_watch_history(result: BaseModel) -> BaseModel:
     if not isinstance(result, HistoryResponse):
         raise TypeError("project_watch_history 收到了错误的结果模型")
+    if result.ingestion_applied:
+        return LlmIngestedHistoryResult(
+            videos=result.video_records,
+            page_size=result.page_size,
+            has_more=result.has_more,
+            next_max=result.next_max,
+            next_view_at=result.next_view_at,
+            status=result.ingestion_status,
+            skipped_count=result.ingestion_skipped_count,
+        )
     return _project(result, LlmHistoryResult)
 
 
 def project_search_videos(result: BaseModel) -> BaseModel:
+    if getattr(result, "ingestion_applied", False):
+        return LlmIngestedPagedResult.model_validate(
+            {
+                "videos": result.video_records,
+                "total_count": result.total_count,
+                "page": result.page,
+                "page_size": result.page_size,
+                "has_more": result.has_more,
+                "status": result.ingestion_status,
+                "skipped_count": result.ingestion_skipped_count,
+            }
+        )
     return _project(result, LlmSearchVideoResult)
 
 
 def project_following_feed(result: BaseModel) -> BaseModel:
+    if getattr(result, "ingestion_applied", False):
+        return LlmIngestedFollowingResult.model_validate(
+            {
+                "videos": result.video_records,
+                "has_more": result.has_more,
+                "next_offset": result.next_offset,
+                "status": result.ingestion_status,
+                "skipped_count": result.ingestion_skipped_count,
+            }
+        )
     return _project(result, LlmFollowingFeedResult)
 
 
@@ -298,4 +424,26 @@ def project_following_users(result: BaseModel) -> BaseModel:
 
 
 def project_user_dynamics(result: BaseModel) -> BaseModel:
+    if getattr(result, "ingestion_applied", False):
+        cid_by_bvid = {
+            record.identity.bvid: record.identity.cid
+            for record in result.video_records
+        }
+        return LlmIngestedUserDynamicsResult.model_validate(
+            {
+                "user_mid": result.user_mid,
+                "items": [
+                    _dynamic_item_with_cid(item, cid_by_bvid)
+                    for item in result.items
+                ],
+                "videos": result.video_records,
+                "total_count": result.total_count,
+                "skipped_count": result.skipped_count,
+                "ingestion_skipped_count": result.ingestion_skipped_count,
+                "pages_fetched": result.pages_fetched,
+                "has_more": result.has_more,
+                "next_offset": result.next_offset,
+                "status": result.ingestion_status,
+            }
+        )
     return _project(result, LlmUserDynamicsResult)

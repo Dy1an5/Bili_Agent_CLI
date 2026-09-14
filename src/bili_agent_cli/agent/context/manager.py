@@ -296,7 +296,14 @@ def _to_source(
     author: dict[str, Any] | None = None,
     source_tool: str | None = None,
 ) -> AgentSource | None:
-    bvid = video.get("bvid")
+    identity = video.get("identity")
+    if not isinstance(identity, dict):
+        identity = {}
+    detail = video.get("detail")
+    if not isinstance(detail, dict):
+        detail = {}
+
+    bvid = identity.get("bvid", video.get("bvid"))
     if not isinstance(bvid, str):
         return None
 
@@ -308,16 +315,28 @@ def _to_source(
     if isinstance(video_author, dict) and isinstance(video_author.get("name"), str):
         author_name = video_author["name"]
 
-    cid = video.get("cid")
-    title = video.get("title")
+    cid = identity.get("cid", video.get("cid"))
+    title = detail.get("title", video.get("title"))
     folder_id = video.get("folder_id")
+    contexts = video.get("contexts")
+    if not isinstance(folder_id, str) and isinstance(contexts, dict):
+        favorite = contexts.get("favorite")
+        if isinstance(favorite, dict):
+            folder_id = favorite.get("folder_id")
+    source_id = video.get("source_id")
     return AgentSource(
         bvid=bvid,
         cid=cid if isinstance(cid, str) else None,
         title=title if isinstance(title, str) else None,
         author_name=author_name,
         folder_id=folder_id if isinstance(folder_id, str) else None,
-        source_id=build_video_source_id(bvid),
+        source_id=(
+            source_id
+            if isinstance(source_id, str)
+            else build_video_source_id(
+                bvid, cid if isinstance(cid, str) else None
+            )
+        ),
         source_tools=[source_tool] if source_tool else [],
     )
 
@@ -378,7 +397,10 @@ def extract_sources(
                     candidates.append(source)
 
     items = data.get("items")
-    if isinstance(items, list):
+    is_unified_video_result = (
+        "status" in data and isinstance(videos, list)
+    )
+    if isinstance(items, list) and not is_unified_video_result:
         for item in items:
             if not isinstance(item, dict):
                 continue

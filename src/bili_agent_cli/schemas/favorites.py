@@ -12,6 +12,7 @@ from pydantic import (
 )
 
 from bili_agent_cli.schemas.common import VideoStats
+from bili_agent_cli.content.models import VideoRecord
 
 
 class FavoriteFoldersQuery(BaseModel):
@@ -64,6 +65,10 @@ class FavoriteFolderVideosResponse(BaseModel):
     page: int
     page_size: int
     has_more: bool
+    video_records: list[VideoRecord] = Field(default_factory=list, exclude=True)
+    ingestion_applied: bool = Field(default=False, exclude=True)
+    ingestion_status: str = Field(default="completed", exclude=True)
+    ingestion_skipped_count: int = Field(default=0, ge=0, exclude=True)
 
 
 class FavoriteFolderPrivacy(StrEnum):
@@ -159,12 +164,14 @@ class PrepareFavoriteSaveArgs(BaseModel):
             raise ValueError("source_ids 不能为空")
         for source_id in normalized:
             prefix = "bilibili:video:"
-            bvid = source_id.removeprefix(prefix)
+            remainder = source_id.removeprefix(prefix)
+            bvid, separator, cid = remainder.partition(":part:")
             if (
                 not source_id.startswith(prefix)
                 or not bvid.startswith("BV")
                 or not bvid.isalnum()
                 or not 8 <= len(bvid) <= 22
+                or (separator and (not cid.isdigit() or cid.startswith("0")))
             ):
                 raise ValueError("source_id 格式不正确")
         return normalized

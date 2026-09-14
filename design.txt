@@ -1,0 +1,23 @@
+现在设计重构计划,输出plan.md.里面必须清楚划分每一步的步骤,记下"必须实现一个步骤后打勾才能继续".
+下面是我的需求:
+1.项目目前不使用fastapi了,代码中有关fastapi的代码清除.
+2.不同接口返回列表后,视频保持一样的格式,bvid+cid作为唯一索引.
+class Author:
+    mid: int,
+    name: str
+
+class video_detail:
+    标题,播放进度等
+
+class feedback:
+    播放量,收藏,点赞,等
+
+class video:
+    Author
+    video_detail,
+
+只是演示,具体需要什么自己安排
+
+3.不同的表可以保存独特的信息,例如收藏夹有添加视频
+4.评分机制
+5.先实现读进数据库,分析先不完成.

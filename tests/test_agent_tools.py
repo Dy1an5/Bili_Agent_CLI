@@ -133,6 +133,20 @@ class AgentToolsTest(unittest.TestCase):
         self.assertEqual(source.source_id, "bilibili:video:BV1compatible")
         self.assertEqual(source.source_tools, [])
 
+    def test_agent_source_uses_cid_but_accepts_legacy_saved_id(self) -> None:
+        current = AgentSource(bvid="BV1compatible", cid="123")
+        legacy = AgentSource(
+            bvid="BV1compatible",
+            cid="123",
+            source_id="bilibili:video:BV1compatible",
+        )
+
+        self.assertEqual(
+            current.source_id,
+            "bilibili:video:BV1compatible:part:123",
+        )
+        self.assertEqual(legacy.source_id, "bilibili:video:BV1compatible")
+
     def test_executes_favorite_folder_tool(self) -> None:
         response = FavoriteFolderListResponse(
             folders=[
@@ -438,6 +452,10 @@ class AgentToolsTest(unittest.TestCase):
                 "bili_agent_cli.agent.tools.bili.get_user_dynamics.fetch_user_dynamics_page",
                 new=AsyncMock(return_value=response),
             ) as fetch_mock,
+            patch(
+                "bili_agent_cli.agent.tools.bili.get_user_dynamics.ingest_user_dynamics",
+                new=AsyncMock(return_value=response),
+            ) as ingest_mock,
         ):
             result = asyncio.run(
                 execute_tool(
@@ -451,6 +469,10 @@ class AgentToolsTest(unittest.TestCase):
             "456",
             "current-cursor",
             "SESSDATA=test-value",
+        )
+        ingest_mock.assert_awaited_once_with(
+            response,
+            sessdata_cookie="SESSDATA=test-value",
         )
         self.assertEqual(result["data"]["user_mid"], "456")
         self.assertEqual(result["data"]["pages_fetched"], 1)

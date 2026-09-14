@@ -2,6 +2,7 @@ from bili_agent_cli.bilibili.favorites import (
     fetch_favorite_folder_videos,
     fetch_favorite_folders,
 )
+from bili_agent_cli.content.ingestion import content_store, ingest_favorite_videos
 from bili_agent_cli.profile import (
     get_sessdata_cookie_header,
     get_user_id,
@@ -20,10 +21,12 @@ async def get_favorite_folders_tool(
     args: FavoriteFoldersQuery,
 ) -> FavoriteFolderListResponse:
     cookies = load_profile()
-    return await fetch_favorite_folders(
+    response = await fetch_favorite_folders(
         get_user_id(cookies),
         get_sessdata_cookie_header(cookies),
     )
+    content_store.save_folders(response.folders)
+    return response
 
 
 async def get_favorite_folder_videos_tool(
@@ -34,8 +37,13 @@ async def get_favorite_folder_videos_tool(
         page=args.page,
         page_size=args.page_size,
     )
-    return await fetch_favorite_folder_videos(
+    sessdata_cookie = get_sessdata_cookie_header(cookies)
+    response = await fetch_favorite_folder_videos(
         args.folder_id,
         query,
-        get_sessdata_cookie_header(cookies),
+        sessdata_cookie,
+    )
+    return await ingest_favorite_videos(
+        response,
+        sessdata_cookie=sessdata_cookie,
     )

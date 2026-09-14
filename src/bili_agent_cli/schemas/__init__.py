@@ -1,1 +1,1 @@
-"""FastAPI input and output contracts."""
+"""Bilibili API and Agent input/output contracts."""

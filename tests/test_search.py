@@ -35,7 +35,7 @@ SEARCH_PAYLOAD = {
             {
                 "aid": 123,
                 "bvid": "BV1search",
-                "title": '<em class="keyword">Python</em> &amp; FastAPI',
+                "title": '<em class="keyword">Python</em> &amp; CLI',
                 "description": "视频&lt;简介&gt;",
                 "pic": "http://i0.hdslb.com/search.jpg",
                 "pubdate": 1_757_472_400,
@@ -122,7 +122,7 @@ class SearchVideoTest(unittest.TestCase):
         response = asyncio.run(run_scenario())
         result = response.model_dump(mode="json")
         video = result["videos"][0]
-        self.assertEqual(video["title"], "Python & FastAPI")
+        self.assertEqual(video["title"], "Python & CLI")
         self.assertEqual(video["description"], "视频<简介>")
         self.assertEqual(video["duration_seconds"], 272)
         self.assertEqual(video["published_at"], "2025-09-10T02:46:40Z")
